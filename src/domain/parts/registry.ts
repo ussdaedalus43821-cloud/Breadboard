@@ -34,6 +34,47 @@ function resistor(ohms: number): PartDef {
   };
 }
 
+/**
+ * Single-digit common-cathode 7-segment display (0.56", 5161AS-type pinout).
+ * Ten pins in two rows 0.6" apart: on the board, pin 1 goes in column e and
+ * the top row lands in column i. Pins 3 and 8 are the common cathode, joined
+ * inside. Each segment is an LED: it needs its own series resistor.
+ *
+ *        10 9 8 7 6           a
+ *        g  f C a b         f   b
+ *                             g
+ *        e  d C c dp        e   c
+ *        1  2 3 4 5           d   dp
+ */
+const SEVEN_SEGMENT: PartDef = {
+  type: 'display-7seg',
+  kind: 'display',
+  label: '7-segment display (common cathode)',
+  idPrefix: 'DS',
+  pins: [
+    ...['e', 'd', 'COM', 'c', 'DP'].map((name, i) => ({
+      pin: String(i + 1),
+      dx: i,
+      dy: 0,
+      role: 'passive' as const,
+      name,
+    })),
+    ...['b', 'a', 'COM', 'f', 'g'].map((name, i) => ({
+      pin: String(i + 6),
+      dx: 4 - i,
+      dy: -6,
+      role: 'passive' as const,
+      name,
+    })),
+  ],
+  leads: 'fixed',
+  anchorColumns: ['e'],
+  internalNets: [['3', '8']],
+  segments: { a: '7', b: '6', c: '4', d: '2', e: '1', f: '9', g: '10', dp: '5' },
+  commonCathode: '3',
+  props: { color: 'red', forwardVolts: 2.0, seriesOhms: 15, maxMilliamps: 20, burnMilliamps: 40 },
+};
+
 const DEFS: readonly PartDef[] = [
   {
     type: 'led-red',
@@ -80,6 +121,7 @@ const DEFS: readonly PartDef[] = [
     props: { poles: 1, throws: 2 },
   },
   ...CHIPS,
+  SEVEN_SEGMENT,
 ];
 
 export class UnknownPartTypeError extends RangeError {

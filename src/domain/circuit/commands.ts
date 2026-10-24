@@ -19,7 +19,7 @@ import {
 import { footprintAt } from '../parts/footprint';
 import { getPartDef, hasPartDef, RESISTOR_VALUES, resistorType } from '../parts/registry';
 import type { PlacedPart } from '../parts/types';
-import { findPart, occupancy, type Circuit, type Supply } from './circuit';
+import { DEFAULT_CLOCK_PERIOD, findPart, occupancy, type Circuit, type Supply } from './circuit';
 
 export type Command =
   /** Place a part's default footprint with its anchor pin at `at`. */
@@ -36,6 +36,10 @@ export type Command =
   | { readonly op: 'power'; readonly at: TerminalKey }
   /** Plug a ground lead into `at`. */
   | { readonly op: 'ground'; readonly at: TerminalKey }
+  /** Plug a function-generator clock lead into `at` (period in ticks; default 10 = 100 Hz). */
+  | { readonly op: 'clock'; readonly at: TerminalKey; readonly periodTicks?: number }
+  /** Change a clock lead's period. */
+  | { readonly op: 'setPeriod'; readonly id: string; readonly periodTicks: number }
   /** Set a part's user state. v1: switches only, value 0 or 1 (`position`). */
   | { readonly op: 'set'; readonly id: string; readonly value: number }
   /** Change a resistor's value in place (same id, same holes). */
@@ -195,6 +199,35 @@ function dispatch(circuit: Circuit, cmd: Command): CommandResult {
         circuit: { ...circuit, supplies: [...circuit.supplies, supply], nextId },
       };
     }
+    case 'clock': {
+      const at = boardTerminal(circuit, cmd.at);
+      if (cmd.at.startsWith('pin:')) {
+        throw new Rejection('BAD_TERMINAL', `a clock lead goes in a hole, got ${cmd.at}`);
+      }
+      const periodTicks = checkPeriod(cmd.periodTicks ?? DEFAULT_CLOCK_PERIOD);
+      assertFree(circuit, [at]);
+      const { id, nextId } = allocateId(circuit, 'CLK');
+      const supply: Supply = { id, kind: 'clock', at, volts: 5, periodTicks };
+      return {
+        ok: true,
+        id,
+        circuit: { ...circuit, supplies: [...circuit.supplies, supply], nextId },
+      };
+    }
+    case 'setPeriod': {
+      const lead = circuit.supplies.find((x) => x.id === cmd.id);
+      if (!lead) throw new Rejection('UNKNOWN_PART', `no clock lead ${JSON.stringify(cmd.id)}`);
+      if (lead.kind !== 'clock') throw new Rejection('BAD_ARGS', `${lead.id} is not a clock lead`);
+      const periodTicks = checkPeriod(cmd.periodTicks);
+      return {
+        ok: true,
+        id: lead.id,
+        circuit: {
+          ...circuit,
+          supplies: circuit.supplies.map((x) => (x.id === lead.id ? { ...x, periodTicks } : x)),
+        },
+      };
+    }
     case 'set': {
       const part = findPart(circuit, cmd.id);
       if (!part) throw new Rejection('UNKNOWN_PART', `no part ${JSON.stringify(cmd.id)}`);
@@ -307,6 +340,16 @@ function leadHoles(
     claimed.add(terminalKey(hole));
     return hole;
   });
+}
+
+function checkPeriod(p: unknown): number {
+  if (typeof p !== 'number' || !Number.isInteger(p) || p < 2 || p % 2 !== 0 || p > 10_000) {
+    throw new Rejection(
+      'BAD_ARGS',
+      `a clock period is an even number of ticks from 2 to 10000, got ${JSON.stringify(p)}`,
+    );
+  }
+  return p;
 }
 
 export function applyCommand(circuit: Circuit, cmd: Command): CommandResult {

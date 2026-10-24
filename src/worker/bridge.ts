@@ -36,12 +36,12 @@ class Refusal extends Error {
 
 /** `"7400"`, `"74HC00"` or `"74hc00"` → `chip74hc00`. Breadboard's chips are all 74HC. */
 function chipType(name: unknown): string {
-  const m = typeof name === 'string' ? /^74(?:hc)?(\d{2})$/i.exec(name) : null;
+  const m = typeof name === 'string' ? /^74(?:hc)?(\d{2,4})$/i.exec(name) : null;
   const type = m ? `chip74hc${m[1]}` : '';
   if (!hasPartDef(type)) {
     throw new Refusal(
       'UNKNOWN_TYPE',
-      `no chip ${JSON.stringify(name)}; try "7400", "7402", "7404" or "7408"`,
+      `no chip ${JSON.stringify(name)}; try "7400", "7402", "7404", "7408", "7432", "7486", "7474" or "74HC4511"`,
     );
   }
   return type;

@@ -13,10 +13,13 @@
 //   SW1 a3/a5 → A on row 5 · SW2 a7/a9 → B on row 9 · U1 pin 1 at e16
 //   Sum: U1 pin 11 → R3 → D1 → ground · Carry: +5 V → R4 → D2 → U1 pin 3
 
+import type { BoardSize } from '../breadboard/spec';
 import type { Command } from '../circuit/commands';
 
 export interface Demo {
   readonly title: string;
+  /** Board size the demo is laid out for (default half). */
+  readonly size?: BoardSize;
   /** Apply to a bench board (benchCircuit), in order. */
   readonly commands: readonly Command[];
   readonly inputs: Readonly<Record<string, string>>;

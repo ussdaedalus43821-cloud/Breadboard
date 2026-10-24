@@ -98,6 +98,11 @@ describe('parts registry', () => {
       'chip74hc02',
       'chip74hc04',
       'chip74hc08',
+      'chip74hc32',
+      'chip74hc86',
+      'chip74hc74',
+      'chip74hc4511',
+      'display-7seg',
     ]);
   });
 

@@ -36,6 +36,10 @@ export class Simulation {
   private pending = new Map<TerminalKey, Pending>();
   /** LEDs destroyed by over-current (part id → mA that killed them). Cleared only by removing the LED. */
   private burnt = new Map<string, number>();
+  /** Chip block state (flip-flop Q, decoder latch), keyed `<part>#<block>`. */
+  private states = new Map<string, unknown>();
+  /** Per-solve cache: terminal key → level. */
+  private levelCache: Map<TerminalKey, Level> | null = null;
   private solved: SimResult;
 
   constructor(circuit: Circuit) {
@@ -73,17 +77,32 @@ export class Simulation {
       for (const key of map.keys()) if (!live.has(key)) map.delete(key);
     }
     const parts = new Set(circuit.parts.map((p) => p.id));
-    for (const id of this.burnt.keys()) if (!parts.has(id)) this.burnt.delete(id);
+    const owner = (key: string): string => key.split(/[:#]/)[0]!;
+    for (const id of this.burnt.keys()) if (!parts.has(owner(id))) this.burnt.delete(id);
+    for (const id of this.states.keys()) if (!parts.has(owner(id))) this.states.delete(id);
     this.solved = this.solveNow();
     this.schedule();
   }
 
-  /** Advance `n` ticks. Returns true if any output changed on the way. */
-  step(n = 1): boolean {
+  /** Level of the net a terminal is on, per the current solve. */
+  levelOf(key: TerminalKey): Level {
+    if (!this.levelCache) {
+      this.levelCache = new Map();
+      for (const net of this.solved.nets)
+        for (const k of net.terminals) this.levelCache.set(k, net.level);
+    }
+    return this.levelCache.get(key) ?? 'Z';
+  }
+
+  /**
+   * Advance `n` ticks. Returns true if anything observable changed on the way
+   * (a chip output, or a clock lead's level). `onTick` runs after each tick.
+   */
+  step(n = 1, onTick?: (tick: number) => void): boolean {
     let changed = false;
     for (let i = 0; i < n; i++) {
       const now = this.ticks + 1;
-      let applied = false;
+      let applied = this.clockToggles(now);
       for (const [key, p] of this.pending) {
         if (p.at > now) continue;
         this.pending.delete(key);
@@ -99,8 +118,16 @@ export class Simulation {
         this.solved = this.solveNow();
         this.schedule();
       }
+      onTick?.(now);
     }
     return changed;
+  }
+
+  /** True if any clock lead changes level at tick `t`. */
+  private clockToggles(t: number): boolean {
+    return this.circuit.supplies.some(
+      (s) => s.kind === 'clock' && t % ((s.periodTicks ?? 10) / 2) === 0,
+    );
   }
 
   /** IDs of LEDs that have burned out. */
@@ -114,7 +141,8 @@ export class Simulation {
    */
   private solveNow(): SimResult {
     for (;;) {
-      const result = solve(this.circuit, this.outputs, this.burnt);
+      this.levelCache = null;
+      const result = solve(this.circuit, this.outputs, this.burnt, this.ticks);
       const killed = overdrivenLeds(this.circuit, result);
       if (killed.size === 0) return result;
       for (const [id, milliamps] of killed) this.burnt.set(id, milliamps);
@@ -132,30 +160,44 @@ export class Simulation {
     for (const part of this.circuit.parts) {
       const logic = getPartDef(part.type).logic;
       if (!logic) continue;
-      for (const g of logic.gates) yield terminalKey(pin(part.id, g.output));
+      for (const b of logic.blocks) for (const o of b.outputs) yield terminalKey(pin(part.id, o));
     }
   }
 
-  /** Evaluate every gate on the current solve; (re)schedule or cancel output changes. */
+  /**
+   * Evaluate every chip block on the current solve, updating block state (a
+   * flip-flop sees its clock edge here), and (re)schedule or cancel output
+   * changes. An unpowered chip drives nothing and keeps its state.
+   */
   private schedule(): void {
-    const levels = new Map<TerminalKey, Level>();
-    for (const net of this.solved.nets) for (const k of net.terminals) levels.set(k, net.level);
-    const at = (part: string, name: string): Level =>
-      levels.get(terminalKey(pin(part, name))) ?? 'Z';
+    const at = (part: string, name: string): Level => this.levelOf(terminalKey(pin(part, name)));
 
     for (const part of this.circuit.parts) {
       const logic = getPartDef(part.type).logic;
       if (!logic) continue;
       const powered = at(part.id, logic.vcc) === 1 && at(part.id, logic.gnd) === 0;
-      for (const g of logic.gates) {
-        const key = terminalKey(pin(part.id, g.output));
-        const target: Level = powered ? g.fn(g.inputs.map((name) => at(part.id, name))) : 'Z';
-        if (target === this.outputLevel(key)) {
-          this.pending.delete(key); // inertial: the change was undone before it landed
-        } else if (this.pending.get(key)?.value !== target) {
-          this.pending.set(key, { at: this.ticks + logic.delayTicks, value: target });
+      logic.blocks.forEach((block, i) => {
+        let targets: Readonly<Record<string, Level>>;
+        if (powered) {
+          const key = `${part.id}#${i}`;
+          const inputs: Record<string, Level> = {};
+          for (const name of block.inputs) inputs[name] = at(part.id, name);
+          const r = block.eval(inputs, this.states.has(key) ? this.states.get(key) : block.initial);
+          this.states.set(key, r.state);
+          targets = r.outputs;
+        } else {
+          targets = Object.fromEntries(block.outputs.map((o) => [o, 'Z' as Level]));
         }
-      }
+        for (const out of block.outputs) {
+          const key = terminalKey(pin(part.id, out));
+          const target = targets[out] ?? 'X';
+          if (target === this.outputLevel(key)) {
+            this.pending.delete(key); // inertial: the change was undone before it landed
+          } else if (this.pending.get(key)?.value !== target) {
+            this.pending.set(key, { at: this.ticks + logic.delayTicks, value: target });
+          }
+        }
+      });
     }
   }
 }

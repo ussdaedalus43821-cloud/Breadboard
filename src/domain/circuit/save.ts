@@ -37,9 +37,11 @@ export interface SaveFile {
   }[];
   readonly supplies: readonly {
     readonly id: string;
-    readonly kind: 'power' | 'ground';
+    readonly kind: 'power' | 'ground' | 'clock';
     readonly at: TerminalKey;
     readonly volts: number;
+    /** Clock leads only (added in Phase 6; older saves simply have none). */
+    readonly periodTicks?: number;
   }[];
   readonly meta?: { readonly title?: string; readonly created?: string };
 }
@@ -70,6 +72,7 @@ export function toSave(circuit: Circuit, meta: SaveFile['meta'] = {}): SaveFile 
       kind: s.kind,
       at: terminalKey(s.at),
       volts: s.volts,
+      ...(s.periodTicks === undefined ? {} : { periodTicks: s.periodTicks }),
     })),
     meta,
   };
@@ -150,8 +153,17 @@ export function fromSave(raw: unknown): LoadResult {
     }
     for (const sp of s.supplies ?? []) {
       unique(sp.id);
-      if (sp.kind !== 'power' && sp.kind !== 'ground') throw new Error(`supply ${sp.id}: bad kind`);
-      apply('supply', sp.id, { op: sp.kind, at: sp.at });
+      if (sp.kind === 'clock') {
+        apply('supply', sp.id, {
+          op: 'clock',
+          at: sp.at,
+          ...(sp.periodTicks === undefined ? {} : { periodTicks: sp.periodTicks }),
+        });
+      } else if (sp.kind === 'power' || sp.kind === 'ground') {
+        apply('supply', sp.id, { op: sp.kind, at: sp.at });
+      } else {
+        throw new Error(`supply ${sp.id}: bad kind ${JSON.stringify(sp.kind)}`);
+      }
     }
     // Ids are never reused: continue after the highest saved number.
     return { ok: true, circuit: { ...circuit, nextId } };

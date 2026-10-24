@@ -1,4 +1,5 @@
-// The 74HC chips Breadboard knows. Each is one gateChip(...) call.
+// The 74HC chips Breadboard knows. Gate chips are one gateChip(...) call each;
+// chips with memory are in sequential.ts.
 
 import type { PartDef } from '../parts/types';
 import {
@@ -8,9 +9,12 @@ import {
   NOR,
   NOT,
   QUAD_2_INPUT,
+  OR,
   QUAD_2_INPUT_NOR,
+  XOR,
   gateChip,
 } from './gate';
+import { CHIP_74HC4511, CHIP_74HC74 } from './sequential';
 
 export const CHIPS: readonly PartDef[] = [
   gateChip({
@@ -41,4 +45,20 @@ export const CHIPS: readonly PartDef[] = [
     pinout: QUAD_2_INPUT,
     fn: AND,
   }),
+  gateChip({
+    type: 'chip74hc32',
+    part: '74HC32',
+    label: '74HC32 quad OR',
+    pinout: QUAD_2_INPUT,
+    fn: OR,
+  }),
+  gateChip({
+    type: 'chip74hc86',
+    part: '74HC86',
+    label: '74HC86 quad XOR',
+    pinout: QUAD_2_INPUT,
+    fn: XOR,
+  }),
+  CHIP_74HC74,
+  CHIP_74HC4511,
 ];

@@ -19,16 +19,41 @@ export const NOT: GateFn = ([a]) => invert(a ?? 'X');
 export const XOR: GateFn = (ins) =>
   ins.every(known) ? ((ins.filter((v) => v === 1).length % 2) as 0 | 1) : 'X';
 
-export interface Gate {
-  /** Input pin names, in order. */
+/**
+ * One functional unit of a chip: a gate, a flip-flop, a decoder. Pure: given
+ * the levels on its input pins and its own state, it returns the levels its
+ * output pins should drive and its next state. Stateless gates ignore state.
+ * The engine evaluates it after every solve (so `eval` must be idempotent for
+ * unchanged inputs: an edge is a change, seen once) and applies the outputs
+ * `delayTicks` later.
+ */
+export interface Block<S = unknown> {
   readonly inputs: readonly string[];
-  readonly output: string;
-  readonly fn: GateFn;
+  readonly outputs: readonly string[];
+  /** State at power-on. */
+  readonly initial: S;
+  eval(
+    inputs: Readonly<Record<string, Level>>,
+    state: S,
+  ): { readonly outputs: Readonly<Record<string, Level>>; readonly state: S };
 }
 
-/** How a chip computes: its gates, supply pins, and propagation delay. */
+/** A combinational gate as a Block. */
+export function gate(inputs: readonly string[], output: string, fn: GateFn): Block<null> {
+  return {
+    inputs,
+    outputs: [output],
+    initial: null,
+    eval: (levels) => ({
+      outputs: { [output]: fn(inputs.map((p) => levels[p] ?? 'Z')) },
+      state: null,
+    }),
+  };
+}
+
+/** How a chip computes: its blocks, supply pins, and propagation delay. */
 export interface ChipLogic {
-  readonly gates: readonly Gate[];
+  readonly blocks: readonly Block[];
   readonly vcc: string;
   readonly gnd: string;
   /**
@@ -91,33 +116,62 @@ export interface GateChipSpec {
 }
 
 /** Build a 14-pin gate chip's PartDef (footprint, pin roles and names, logic). */
-export function gateChip(spec: GateChipSpec): PartDef {
-  const roles = new Map<string, readonly [PinRole, string]>([
-    ['7', ['ground', 'GND']],
-    ['14', ['power', 'VCC']],
-  ]);
-  const gates: Gate[] = spec.pinout.map((pins, i) => {
-    const n = i + 1;
-    const inputs = pins.slice(0, -1).map(String);
-    const output = String(pins[pins.length - 1]);
-    const letters = inputs.length === 1 ? ['A'] : ['A', 'B', 'C', 'D'];
-    inputs.forEach((p, k) => roles.set(p, ['input', `${n}${letters[k]}`]));
-    roles.set(output, ['output', `${n}Y`]);
-    return { inputs, output, fn: spec.fn };
-  });
-  if (roles.size !== 14) throw new Error(`${spec.part}: pinout does not cover 14 pins`);
+export interface DipChipSpec {
+  readonly type: string;
+  readonly part: string;
+  readonly label: string;
+  readonly pinCount: number;
+  /** Every pin: role and datasheet name. */
+  readonly pins: Readonly<Record<string, readonly [PinRole, string]>>;
+  readonly blocks: readonly Block[];
+  readonly vcc: string;
+  readonly gnd: string;
+  readonly delayTicks?: number;
+}
+
+/** Build any DIP logic chip from a pin table and its blocks. */
+export function dipChip(spec: DipChipSpec): PartDef {
+  const named = Object.keys(spec.pins);
+  if (named.length !== spec.pinCount) {
+    throw new Error(`${spec.part}: pin table covers ${named.length} of ${spec.pinCount} pins`);
+  }
+  for (const b of spec.blocks) {
+    for (const p of [...b.inputs, ...b.outputs]) {
+      if (!spec.pins[p]) throw new Error(`${spec.part}: block uses unknown pin ${p}`);
+    }
+  }
   return {
     type: spec.type,
     kind: 'chip',
     label: spec.label,
     idPrefix: 'U',
-    pins: dipFootprint(14).map((p) => {
-      const [role, name] = roles.get(p.pin)!;
+    pins: dipFootprint(spec.pinCount).map((p) => {
+      const [role, name] = spec.pins[p.pin]!;
       return { ...p, role, name };
     }),
     leads: 'fixed',
     anchorColumns: ['e'],
-    props: { part: spec.part, vccPin: '14', gndPin: '7' },
-    logic: { gates, vcc: '14', gnd: '7', delayTicks: spec.delayTicks ?? 1 },
+    props: { part: spec.part, vccPin: spec.vcc, gndPin: spec.gnd },
+    logic: { blocks: spec.blocks, vcc: spec.vcc, gnd: spec.gnd, delayTicks: spec.delayTicks ?? 1 },
   };
+}
+
+/** Build a 14-pin gate chip (VCC 14, GND 7) from its pinout table and gate function. */
+export function gateChip(spec: GateChipSpec): PartDef {
+  const pins: Record<string, readonly [PinRole, string]> = {
+    '7': ['ground', 'GND'],
+    '14': ['power', 'VCC'],
+  };
+  const blocks = spec.pinout.map((row, i) => {
+    const n = i + 1;
+    const inputs = row.slice(0, -1).map(String);
+    const output = String(row[row.length - 1]);
+    const letters = inputs.length === 1 ? ['A'] : ['A', 'B', 'C', 'D'];
+    inputs.forEach((p, k) => (pins[p] = ['input', `${n}${letters[k]}`]));
+    pins[output] = ['output', `${n}Y`];
+    return gate(inputs, output, spec.fn);
+  });
+  if (Object.keys(pins).length !== 14)
+    throw new Error(`${spec.part}: pinout does not cover 14 pins`);
+  return dipChip({ ...spec, pinCount: 14, pins, blocks, vcc: '14', gnd: '7' });
 }

@@ -44,8 +44,8 @@ describe('gateChip builder', () => {
       expect(def.pins.every((p) => p.role && p.name)).toBe(true);
       expect(def.pins.find((p) => p.pin === '14')).toMatchObject({ role: 'power', name: 'VCC' });
       expect(def.pins.find((p) => p.pin === '7')).toMatchObject({ role: 'ground', name: 'GND' });
-      for (const g of def.logic!.gates) {
-        expect(def.pins.find((p) => p.pin === g.output)!.role).toBe('output');
+      for (const g of def.logic!.blocks) {
+        expect(def.pins.find((p) => p.pin === g.outputs[0])!.role).toBe('output');
         for (const i of g.inputs) expect(def.pins.find((p) => p.pin === i)!.role).toBe('input');
       }
     },
@@ -56,7 +56,7 @@ describe('gateChip builder', () => {
     const name = (pin: string) => nor.pins.find((p) => p.pin === pin)!.name;
     expect([name('1'), name('2'), name('3'), name('13')]).toEqual(['1Y', '1A', '1B', '4Y']);
     const inv = getPartDef('chip74hc04');
-    expect(inv.logic!.gates).toHaveLength(6);
+    expect(inv.logic!.blocks).toHaveLength(6);
     expect(inv.pins.find((p) => p.pin === '8')!.name).toBe('4Y');
   });
 

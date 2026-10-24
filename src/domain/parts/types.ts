@@ -22,7 +22,7 @@ export interface PinFootprint {
   readonly name?: string;
 }
 
-export type PartKind = 'led' | 'resistor' | 'switch' | 'chip';
+export type PartKind = 'led' | 'resistor' | 'switch' | 'chip' | 'display';
 
 export interface PartDef {
   /** Registry key, also the `type` in saves and the bridge (e.g. `led-red`). */
@@ -47,8 +47,16 @@ export interface PartDef {
   readonly anchorColumns?: readonly ColumnLetter[];
   /** Static electrical properties; read by the sim from Phase 2 on. */
   readonly props: Readonly<Record<string, string | number>>;
-  /** Logic chips only: gates, supply pins, propagation delay (domain/chips). */
+  /** Logic chips only: blocks, supply pins, propagation delay (domain/chips). */
   readonly logic?: ChipLogic;
+  /** Groups of pins the part joins internally (each group is one net). */
+  readonly internalNets?: readonly (readonly string[])[];
+  /**
+   * Displays only: each segment is an LED from its pin (anode) to the common
+   * cathode pin. Keys are segment names (a–g, dp).
+   */
+  readonly segments?: Readonly<Record<string, string>>;
+  readonly commonCathode?: string;
 }
 
 /** A part on the board. Every pin maps to the board terminal (hole or rail hole) it sits in. */

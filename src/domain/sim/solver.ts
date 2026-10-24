@@ -23,10 +23,11 @@ import {
   type TerminalKey,
   type TerminalRef,
 } from '../breadboard/terminal';
-import { circuitNetlist, type Circuit } from '../circuit/circuit';
+import { circuitNetlist, clockLevel, DEFAULT_CLOCK_PERIOD, type Circuit } from '../circuit/circuit';
 import { getPartDef } from '../parts/registry';
 import type { PartDef, PlacedPart } from '../parts/types';
 import {
+  CLOCK_OHMS,
   GMIN_SIEMENS,
   HC_OUTPUT_MAX_MILLIAMPS,
   HC_OUTPUT_OHMS,
@@ -74,8 +75,18 @@ export interface SimWarning {
   readonly at: readonly TerminalKey[];
 }
 
+/** One segment of a display: an LED. */
+export interface SegmentState {
+  readonly lit: boolean;
+  readonly brightness: number;
+  readonly milliamps: number;
+  readonly burnt: boolean;
+}
+
 /** Observable per-part state. */
 export interface PartState {
+  /** Displays: each segment's LED state, by segment name. */
+  readonly segments?: Readonly<Record<string, SegmentState>>;
   readonly lit?: boolean;
   /** LED glow, 0…1 of its rated current. */
   readonly brightness?: number;
@@ -98,7 +109,7 @@ export interface SimResult {
 /** Levels chip outputs are currently driving, by pin key. `Z` (or absent) drives nothing. */
 export type OutputLevels = ReadonlyMap<TerminalKey, Level>;
 
-/** LEDs destroyed earlier, by part id, with the current that killed them (mA). */
+/** LEDs destroyed earlier, by part id (or `<part>:<segment>`), with the current that killed them (mA). */
 export type BurntLeds = ReadonlyMap<string, number>;
 
 const byKey = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -135,6 +146,8 @@ interface Driver {
 }
 
 interface Led {
+  /** Part id for an LED; `<part>:<segment>` for a display segment. */
+  readonly key: string;
   readonly part: PlacedPart;
   readonly def: PartDef;
   readonly a: string;
@@ -155,6 +168,8 @@ export function solve(
   circuit: Circuit,
   outputs: OutputLevels = new Map(),
   burnt: BurntLeds = new Map(),
+  /** Sim time, for clock leads. */
+  ticks = 0,
 ): SimResult {
   const base = circuitNetlist(circuit);
   const defs = new Map(circuit.parts.map((p) => [p.id, getPartDef(p.type)]));
@@ -189,11 +204,14 @@ export function solve(
   // 2. Elements.
   const drivers: Driver[] = [];
   for (const s of circuit.supplies) {
-    const high = s.kind === 'power';
+    const clock = s.kind === 'clock';
+    const high = clock
+      ? clockLevel(s.periodTicks ?? DEFAULT_CLOCK_PERIOD, ticks) === 1
+      : s.kind === 'power';
     drivers.push({
       net: netOf(s.at),
       volts: high ? SUPPLY_VOLTS : 0,
-      ohms: SUPPLY_OHMS,
+      ohms: clock ? CLOCK_OHMS : SUPPLY_OHMS,
       level: high ? 1 : 0,
       key: terminalKey(s.at),
       label: s.id,
@@ -231,6 +249,7 @@ export function solve(
       });
     } else if (def.kind === 'led' && !burnt.has(part.id)) {
       leds.push({
+        key: part.id,
         part,
         def,
         a: netOf(pin(part.id, 'anode')),
@@ -239,6 +258,21 @@ export function solve(
         rs: Number(def.props['seriesOhms']),
         on: false,
       });
+    } else if (def.kind === 'display') {
+      for (const [seg, anode] of Object.entries(def.segments ?? {})) {
+        const key = `${part.id}:${seg}`;
+        if (burnt.has(key)) continue;
+        leds.push({
+          key,
+          part,
+          def,
+          a: netOf(pin(part.id, anode)),
+          k: netOf(pin(part.id, def.commonCathode!)),
+          vf: Number(def.props['forwardVolts']),
+          rs: Number(def.props['seriesOhms']),
+          on: false,
+        });
+      }
     }
   }
 
@@ -342,7 +376,7 @@ export function solve(
   // 5. Part states and warnings.
   const warnings: SimWarning[] = [];
   const parts: Record<string, PartState> = {};
-  const ledByPart = new Map(leds.map((l) => [l.part.id, l]));
+  const ledByKey = new Map(leds.map((l) => [l.key, l]));
   const resistorByPart = new Map(resistors.map((r) => [r.part.id, r]));
 
   for (const part of circuit.parts) {
@@ -359,7 +393,7 @@ export function solve(
         });
         continue;
       }
-      const amps = ledAmps(ledByPart.get(part.id)!);
+      const amps = ledAmps(ledByKey.get(part.id)!);
       const milliamps = Math.max(0, amps * 1000);
       const rated = Number(def.props['maxMilliamps']);
       parts[part.id] = {
@@ -378,6 +412,38 @@ export function solve(
     } else if (def.kind === 'resistor') {
       const r = resistorByPart.get(part.id)!;
       parts[part.id] = { milliamps: round(((vOf(r.a) - vOf(r.b)) / r.ohms) * 1000) };
+    } else if (def.kind === 'display') {
+      const rated = Number(def.props['maxMilliamps']);
+      const segments: Record<string, SegmentState> = {};
+      for (const [seg, anode] of Object.entries(def.segments ?? {})) {
+        const key = `${part.id}:${seg}`;
+        const at = [pinKey(anode), pinKey(def.commonCathode!)];
+        const killed = burnt.get(key);
+        if (killed !== undefined) {
+          segments[seg] = { lit: false, brightness: 0, milliamps: 0, burnt: true };
+          warnings.push({
+            code: 'LED_BURNT',
+            message: `${part.id} segment ${seg} burned out: current limit exceeded (${killed.toFixed(0)} mA through it, rated ${rated} mA). Add a series resistor, then replace the display`,
+            at,
+          });
+          continue;
+        }
+        const milliamps = Math.max(0, ledAmps(ledByKey.get(key)!) * 1000);
+        segments[seg] = {
+          lit: milliamps >= LED_LIT_MILLIAMPS,
+          brightness: Math.min(1, milliamps / rated),
+          milliamps: round(milliamps),
+          burnt: false,
+        };
+        if (milliamps > rated) {
+          warnings.push({
+            code: 'OVERCURRENT',
+            message: `${part.id} segment ${seg} carries ${milliamps.toFixed(0)} mA, over its ${rated} mA rating: use a larger series resistor`,
+            at,
+          });
+        }
+      }
+      parts[part.id] = { segments, burnt: Object.values(segments).some((x) => x.burnt) };
     } else if (def.kind === 'switch') {
       parts[part.id] = { position: switchPosition(part) };
     } else {
@@ -476,10 +542,16 @@ export function overdrivenLeds(circuit: Circuit, result: SimResult): Map<string,
   const out = new Map<string, number>();
   for (const part of circuit.parts) {
     const def = getPartDef(part.type);
-    if (def.kind !== 'led') continue;
+    const limit = Number(def.props['burnMilliamps']);
     const s = result.parts[part.id];
-    if (!s || s.burnt) continue;
-    if ((s.milliamps ?? 0) > Number(def.props['burnMilliamps'])) out.set(part.id, s.milliamps!);
+    if (!s) continue;
+    if (def.kind === 'led' && !s.burnt && (s.milliamps ?? 0) > limit)
+      out.set(part.id, s.milliamps!);
+    if (def.kind === 'display') {
+      for (const [seg, x] of Object.entries(s.segments ?? {})) {
+        if (!x.burnt && x.milliamps > limit) out.set(`${part.id}:${seg}`, x.milliamps);
+      }
+    }
   }
   return out;
 }

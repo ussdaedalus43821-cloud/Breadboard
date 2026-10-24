@@ -7,6 +7,9 @@ export const SUPPLY_OHMS = 0.1;
 /** Bench supply current limit. Above it the supply is shorted (SHORT). */
 export const SUPPLY_LIMIT_AMPS = 1;
 
+/** A function generator's clock lead: 0/5 V behind the usual 50 Ω output. */
+export const CLOCK_OHMS = 50;
+
 /** A 74HC output at 5 V: a 0 V / 5 V source behind about 50 Ω. */
 export const HC_OUTPUT_OHMS = 50;
 /** 74HC absolute maximum output current per pin. Above it: CONTENTION / OUTPUT_OVERLOAD. */

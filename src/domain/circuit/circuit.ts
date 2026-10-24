@@ -10,6 +10,7 @@ import {
 } from '../breadboard/spec';
 import { buildNetlist, type Netlist } from '../breadboard/netlist';
 import { pin, rail, terminalKey, type TerminalKey, type TerminalRef } from '../breadboard/terminal';
+import { getPartDef } from '../parts/registry';
 import type { PlacedPart } from '../parts/types';
 
 export interface Wire {
@@ -18,12 +19,27 @@ export interface Wire {
   readonly to: BoardTerminal;
 }
 
-/** A bench-supply lead plugged into a board terminal: +5 V or ground. */
+/**
+ * A bench-instrument lead plugged into a board terminal: +5 V, ground, or a
+ * function generator's 0/5 V square wave (`clock`), high for the first half
+ * of each period.
+ */
 export interface Supply {
   readonly id: string;
-  readonly kind: 'power' | 'ground';
+  readonly kind: 'power' | 'ground' | 'clock';
   readonly at: BoardTerminal;
   readonly volts: number;
+  /** Clock leads only: period in ticks (even, ≥ 2). 10 ticks = 100 Hz. */
+  readonly periodTicks?: number;
+}
+
+/** Clock-lead periods the UI offers, in ticks (1 tick = 1 ms). */
+export const CLOCK_PERIODS: readonly number[] = [2, 10, 20, 100, 1000];
+export const DEFAULT_CLOCK_PERIOD = 10;
+
+/** A clock lead's level at tick `t`: high for the first half of each period. */
+export function clockLevel(periodTicks: number, t: number): 0 | 1 {
+  return Math.floor(t / (periodTicks / 2)) % 2 === 0 ? 1 : 0;
 }
 
 export interface Circuit {
@@ -114,6 +130,11 @@ export function circuitNetlist(circuit: Circuit): Netlist {
   const connections: Array<readonly [TerminalRef, TerminalRef]> = [];
   for (const part of circuit.parts) {
     for (const [name, t] of Object.entries(part.pins)) connections.push([pin(part.id, name), t]);
+    // Pins the part joins internally (a display's two COM pins).
+    for (const group of getPartDef(part.type).internalNets ?? []) {
+      for (const other of group.slice(1))
+        connections.push([pin(part.id, group[0]!), pin(part.id, other)]);
+    }
   }
   for (const w of circuit.wires) connections.push([w.from, w.to]);
   return buildNetlist(circuit.spec, { connections });
