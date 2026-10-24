@@ -282,14 +282,15 @@ half adder the acceptance criteria asked for. The contract itself named
 `board.resistor` as "the expected first edit", so it was added as command
 11 with a version bump to v2. Values are 100, 330, 1 000 or 10 000 Ω.
 Every v1 call is unchanged, and v1 requests are still accepted (minus
-`board.resistor`). **Flagged to the project owner.** To stay at 10
+`board.resistor`). Flagged to the project owner. To stay at 10
 commands, drop `board.resistor` and give `board.led` a built-in series
 resistor instead. In the same spirit, `board.led` and `board.resistor`
 accept `pin:` refs the way `board.wire` does (D-011), and leads aimed at
 one strip get distinct holes. This is done in the bridge layer
 (`src/worker/bridge.ts`), because Phase 4.5 leaves `domain/` untouched.
 Known gap, left in domain/ for Phase 5: `board.wire` with both ends as
-`pin:` refs in the same strip picks the same hole twice and is refused. `board.chip` takes `"7400"` or `"74HC00"`
+`pin:` refs in the same strip picks the same hole twice and is refused.
+**Fixed in Phase 5 (D-035).** **v2 approved by the project owner.** `board.chip` takes `"7400"` or `"74HC00"`
 (every chip is the 74HC part).
 
 ## D-032 — Scripts get no Python objects and no `python.*` (Accepted, Phase 4.5)
@@ -335,3 +336,39 @@ helpers are unit-tested, and the full hop (plus `fetch` stripping, hard
 kill, Stop, and loading nothing from off-site) is verified in Chromium.
 The watchdog's soft stop is tested in Node by a worker thread that writes
 SIGINT into the interrupt buffer while NovaLang spins on the main thread.
+
+## D-035 — Lead normalization moves back into domain/; the same-strip wire gap is fixed (Accepted, Phase 5)
+
+The dispatcher resolves every `pin:` lead (wire ends, `placeLeads` pins)
+through one helper. That helper picks the nearest free hole joined to the
+pin and skips holes already claimed by earlier leads of the same command.
+So `board.wire("pin:D1:anode", "pin:R1:1")` with both pins in row 10 lands
+in b10 and d10 instead of being refused. The bridge's Phase 4.5 copy of
+this logic is deleted, leaving one path.
+
+## D-036 — History lives in the sim worker; switch flips are not edits (Accepted, Phase 5)
+
+Undo must restore the circuit the sim, the UI and scripts all see, so it
+belongs where that circuit lives. Entries are snapshots of immutable
+circuits: cheap, and they make undo exact. Switch flips are excluded.
+Truth-table testing flips switches dozens of times, and those flips would
+bury the edits you actually want back. Script runs and the demo loader
+are grouped into one entry. Clear board is now undoable (`reset`). The old
+`hello` request still starts a session and clears history, and the
+bridge's `board.new` uses `reset`, so `sim.time()` restarts at 0 as the
+contract says.
+
+## D-037 — Resistor values change in place (Accepted, Phase 5)
+
+The inspector's value picker sends `setResistance { id, ohms }`. That
+swaps the part's registry type (`resistor`, `resistor-100`, …) and keeps
+its id and holes, so it is undoable and saves as the new type. Only the
+stocked values (100 Ω, 330 Ω, 1 kΩ, 10 kΩ) are accepted. This is a
+dispatcher command only: the bridge contract is unchanged (v2). A script
+picks a value with `board.resistor` and cannot yet change it afterwards.
+
+## D-038 — Zoom/pan deferred (Accepted, Phase 5)
+
+The original Phase 5 line listed zoom/pan. The Phase 5 brief did not, and
+at half size the board fits a laptop screen at the fixed 20 px pitch. It is
+a pure UI change (`createBoardLayout` already takes the pitch).

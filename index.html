@@ -21,7 +21,11 @@
         margin-bottom: 12px;
       }
       #palette button,
-      #sim-controls button {
+      #sim-controls button,
+      #circuit-controls button,
+      #circuit-controls input,
+      #circuit-controls select,
+      #inspector select {
         font: inherit;
         padding: 6px 12px;
         border: 1px solid #4a4d55;
@@ -41,6 +45,49 @@
         align-items: center;
         gap: 6px;
         margin-bottom: 12px;
+      }
+      #circuit-controls {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 12px;
+      }
+      #save-name {
+        width: 14ch;
+      }
+      #share-url {
+        flex: 1 1 24ch;
+        min-width: 16ch;
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+      }
+      button:disabled {
+        opacity: 0.45;
+        cursor: default;
+      }
+      #workspace {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: flex-start;
+      }
+      #inspector {
+        min-width: 220px;
+        padding: 10px 12px;
+        border: 1px solid #4a4d55;
+        border-radius: 8px;
+        background: #33353b;
+        font-family: ui-monospace, monospace;
+        font-size: 13px;
+        display: grid;
+        gap: 8px;
+      }
+      #inspector[hidden] {
+        display: none;
+      }
+      .inspector-title {
+        font-weight: 600;
       }
       #clock {
         font-family: ui-monospace, monospace;
@@ -181,7 +228,21 @@
         <button type="button" id="load-demo">Load half-adder demo</button>
         <button type="button" id="clear-board">Clear board</button>
       </div>
-      <canvas id="board"></canvas>
+      <div id="circuit-controls" role="toolbar" aria-label="Circuit">
+        <button type="button" id="undo" disabled title="Ctrl+Z">Undo</button>
+        <button type="button" id="redo" disabled title="Ctrl+Y or Ctrl+Shift+Z">Redo</button>
+        <label>Name <input id="save-name" value="My circuit" maxlength="60" /></label>
+        <button type="button" id="save">Save</button>
+        <select id="saved-list" aria-label="Saved circuits"></select>
+        <button type="button" id="load">Load</button>
+        <button type="button" id="delete-save">Delete</button>
+        <button type="button" id="export-url">Export to URL</button>
+        <input id="share-url" readonly aria-label="Shareable link" hidden />
+      </div>
+      <div id="workspace">
+        <canvas id="board"></canvas>
+        <aside id="inspector" hidden aria-label="Inspector"></aside>
+      </div>
       <button
         type="button"
         id="scripting-toggle"

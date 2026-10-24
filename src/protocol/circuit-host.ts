@@ -39,6 +39,14 @@ export interface CircuitHost {
   run(ms: number): Promise<TimeResult>;
   /** Start or pause the real-time 1 kHz clock. */
   setRunning(running: boolean): Promise<TimeResult>;
-  /** Discard the circuit and start a fresh board. */
+  /** Start a new session: fresh board, empty undo history. */
   reset(options?: ResetOptions): Promise<void>;
+  /** Replace the circuit with a fresh board, as one undoable edit. */
+  clear(options?: ResetOptions): Promise<HostResult>;
+  /** Replace the circuit with a save file, as one undoable edit. */
+  load(save: unknown): Promise<HostResult>;
+  undo(): Promise<HostResult>;
+  redo(): Promise<HostResult>;
+  /** Open (true) or close (false) an undo group: everything in between undoes as one. */
+  group(open: boolean, label?: string): Promise<HostResult>;
 }

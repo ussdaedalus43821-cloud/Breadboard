@@ -3,6 +3,7 @@
 
 import type { BoardSize } from '../domain/breadboard/spec';
 import type { Circuit } from '../domain/circuit/circuit';
+import type { HistoryState } from '../domain/circuit/history';
 import type { Command, CommandError } from '../domain/circuit/commands';
 import type { SimTime } from '../domain/sim/engine';
 import type { SimResult } from '../domain/sim/solver';
@@ -33,7 +34,26 @@ export type SimRequest =
   /** Advance `ms` of sim time (0 < ms ≤ 10 000; rounded up to whole ticks). The bridge's `board.run`. */
   | { readonly v: 1; readonly id: number; readonly kind: 'run'; readonly ms: number }
   /** Start or pause the real-time 1 kHz clock. */
-  | { readonly v: 1; readonly id: number; readonly kind: 'clock'; readonly running: boolean };
+  | { readonly v: 1; readonly id: number; readonly kind: 'clock'; readonly running: boolean }
+  /** Replace the circuit with a fresh board, as one undoable edit (Clear board, board.new). */
+  | {
+      readonly v: 1;
+      readonly id: number;
+      readonly kind: 'reset';
+      readonly size: BoardSize;
+      readonly preset: 'bench' | 'empty';
+    }
+  /** Replace the circuit with a save file (domain/circuit/save.ts), as one undoable edit. */
+  | { readonly v: 1; readonly id: number; readonly kind: 'load'; readonly save: unknown }
+  | { readonly v: 1; readonly id: number; readonly kind: 'undo' | 'redo' }
+  /** Open or close an undo group: every edit in between undoes as one (a script run). */
+  | {
+      readonly v: 1;
+      readonly id: number;
+      readonly kind: 'group';
+      readonly open: boolean;
+      readonly label?: string;
+    };
 
 export type SimErrorCode = CommandError['code'] | 'LIMIT' | 'BAD_REQUEST' | 'INTERNAL';
 
@@ -65,6 +85,7 @@ export interface SimFrame extends SimResult {
   readonly settled: boolean;
   /** The real-time clock is running. */
   readonly running: boolean;
+  readonly history: HistoryState;
 }
 
 export type SimPush =

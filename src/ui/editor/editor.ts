@@ -37,6 +37,8 @@ export type Preview =
 export class Editor {
   tool: Tool = { kind: 'select' };
   hover: BoardTerminal | null = null;
+  /** Part shown in the inspector (Select tool). */
+  selected: string | null = null;
   /** Status line text: last result or a hint. */
   message = 'Pick a part from the palette, then click a hole.';
   private dragFrom: BoardTerminal | null = null;
@@ -50,6 +52,8 @@ export class Editor {
   ) {
     host.subscribe((c) => {
       this.circuit = c;
+      // An undo or a load can take the selected part away.
+      if (this.selected && !c.parts.some((p) => p.id === this.selected)) this.selected = null;
       this.onChange();
     });
     host.subscribeFrames((f) => {
@@ -112,7 +116,7 @@ export class Editor {
           ? 'Wire: drag from one hole to another.'
           : tool.kind === 'supply'
             ? `${tool.supply === 'power' ? '+5 V' : 'Ground'} lead: click a hole (normally a rail).`
-            : 'Select: click a switch to flip it; right-click a lead to remove its part or wire.';
+            : 'Select: click a part to inspect it (switches flip); Delete or right-click removes.';
     this.onChange();
   }
 
@@ -131,7 +135,7 @@ export class Editor {
   async pointerDown(t: BoardTerminal | null, point?: Point): Promise<void> {
     const tool = this.tool;
     if (tool.kind === 'select') {
-      await this.toggleAt(t, point);
+      await this.selectAt(t, point);
       return;
     }
     if (!t) return;
@@ -187,7 +191,23 @@ export class Editor {
   }
 
   /** Flip the switch whose pin is in `t`, or whose body is under `point`. */
-  private async toggleAt(t: BoardTerminal | null, point?: Point): Promise<void> {
+  /** Change the selected resistor's value (the inspector's control). */
+  async setResistance(ohms: number): Promise<void> {
+    if (!this.selected) return;
+    await this.run({ op: 'setResistance', id: this.selected, ohms }, 'Changed');
+  }
+
+  /** Delete key: remove the selected part. */
+  async removeSelected(): Promise<void> {
+    if (!this.selected) return;
+    await this.run({ op: 'remove', id: this.selected }, 'Removed');
+  }
+
+  /**
+   * Select the part whose pin is in `t`, or whose body is under `point`, for
+   * the inspector; flip it if it is a switch. Clicking empty board deselects.
+   */
+  private async selectAt(t: BoardTerminal | null, point?: Point): Promise<void> {
     const c = this.current;
     const who = t ? occupancy(c).get(terminalKey(t)) : undefined;
     const part =
@@ -196,7 +216,16 @@ export class Editor {
         : point
           ? partAtPoint(c, point.x, point.y)
           : undefined;
-    if (!part || getPartDef(part.type).kind !== 'switch') return;
+    this.selected = part?.id ?? null;
+    if (!part) {
+      this.onChange();
+      return;
+    }
+    if (getPartDef(part.type).kind !== 'switch') {
+      this.message = `Selected ${part.id}.`;
+      this.onChange();
+      return;
+    }
     const next = (part.state?.['position'] ?? 0) === 1 ? 0 : 1;
     const r = await this.host.apply({ op: 'set', id: part.id, value: next });
     const label = part.type === 'switch-spst' ? (next ? 'closed' : 'open') : `position ${next}`;

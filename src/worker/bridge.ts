@@ -2,11 +2,10 @@
 // then turned into the same SimService requests the UI sends, so scripts and
 // the editor share one validation path. Results are plain JSON.
 
-import { boardConnections, isOnBoard, terminalPosition } from '../domain/breadboard/spec';
+import { isOnBoard } from '../domain/breadboard/spec';
 import { parseTerminal, terminalKey, TerminalRefError } from '../domain/breadboard/terminal';
-import { occupancy } from '../domain/circuit/circuit';
 import type { Command } from '../domain/circuit/commands';
-import { getPartDef, hasPartDef } from '../domain/parts/registry';
+import { getPartDef, hasPartDef, RESISTOR_VALUES, resistorType } from '../domain/parts/registry';
 import type { PlacedPart } from '../domain/parts/types';
 import {
   BRIDGE_OPS,
@@ -34,14 +33,6 @@ class Refusal extends Error {
     super(message);
   }
 }
-
-/** Resistor values `board.resistor` accepts, and the registry type for each. */
-const RESISTORS: Readonly<Record<number, string>> = {
-  100: 'resistor-100',
-  330: 'resistor',
-  1000: 'resistor-1k',
-  10000: 'resistor-10k',
-};
 
 /** `"7400"`, `"74HC00"` or `"74hc00"` → `chip74hc00`. Breadboard's chips are all 74HC. */
 function chipType(name: unknown): string {
@@ -115,42 +106,6 @@ export function handleBridge(service: SimService, raw: unknown): BridgeOutcome {
   };
   const command = (cmd: Command): string => send({ kind: 'command', cmd }).id ?? '';
   const part = (pid: string): PlacedPart => service.state.circuit.parts.find((p) => p.id === pid)!;
-  /**
-   * Flexible leads given as `pin:` refs land in the nearest free hole the board
-   * joins to that pin's hole, as `board.wire` ends do (D-011), each lead in its
-   * own hole. Done here, not in domain/, which Phase 4.5 does not change. Keys
-   * that are not pins, or pins that do not exist, pass through for the
-   * dispatcher to judge.
-   */
-  const leadHoles = (keys: readonly string[]): string[] => {
-    const { circuit } = service.state;
-    const taken = new Set(occupancy(circuit).keys());
-    return keys.map((key) => {
-      if (!key.startsWith('pin:')) return key;
-      let ref;
-      try {
-        ref = parseTerminal(key);
-      } catch {
-        return key;
-      }
-      if (ref.kind !== 'pin') return key;
-      const at = circuit.parts.find((p) => p.id === ref.part)?.pins[ref.pin];
-      if (!at) return key;
-      const atKey = terminalKey(at);
-      const group =
-        boardConnections(circuit.spec).find((g) => g.some((m) => terminalKey(m) === atKey)) ?? [];
-      const origin = terminalPosition(circuit.spec, at);
-      const dist = (k: string): number => {
-        const q = terminalPosition(circuit.spec, parseTerminal(k));
-        return Math.hypot(q.x - origin.x, q.y - origin.y);
-      };
-      const free = group.map(terminalKey).filter((k) => !taken.has(k));
-      free.sort((a, b) => dist(a) - dist(b));
-      if (!free[0]) throw new Refusal('OCCUPIED', `no free hole left joined to ${key}`);
-      taken.add(free[0]);
-      return free[0];
-    });
-  };
   const placing = (): void => {
     if (service.state.circuit.parts.length >= MAX_PARTS) {
       throw new Refusal('LIMIT', `a board holds at most ${MAX_PARTS} parts`);
@@ -202,7 +157,7 @@ export function handleBridge(service: SimService, raw: unknown): BridgeOutcome {
             `board.new: size must be "half" or "full", got ${JSON.stringify(size)}`,
           );
         }
-        send({ kind: 'hello', size, preset: 'empty' });
+        send({ kind: 'reset', size, preset: 'empty' });
         const spec = service.state.circuit.spec;
         return { size: spec.size, rows: spec.rows, splitRails: spec.splitRails };
       }
@@ -216,26 +171,21 @@ export function handleBridge(service: SimService, raw: unknown): BridgeOutcome {
       case 'board.led': {
         arity(op, args, 2);
         placing();
-        const [anode, cathode] = leadHoles([
-          str(op, 'anode', args[0]),
-          str(op, 'cathode', args[1]),
-        ]);
-        const pins = { anode: anode!, cathode: cathode! };
+        const pins = { anode: str(op, 'anode', args[0]), cathode: str(op, 'cathode', args[1]) };
         return handle(part(command({ op: 'placeLeads', type: 'led-red', pins })));
       }
       case 'board.resistor': {
         arity(op, args, 3);
         placing();
         const ohms = num(op, 'ohms', args[0]);
-        const type = RESISTORS[ohms];
+        const type = resistorType(ohms);
         if (!type) {
           throw new Refusal(
             'BAD_ARGS',
-            `board.resistor: ohms must be one of ${Object.keys(RESISTORS).join(', ')}, got ${ohms}`,
+            `board.resistor: ohms must be one of ${RESISTOR_VALUES.join(', ')}, got ${ohms}`,
           );
         }
-        const [from, to] = leadHoles([str(op, 'from', args[1]), str(op, 'to', args[2])]);
-        const pins = { '1': from!, '2': to! };
+        const pins = { '1': str(op, 'from', args[1]), '2': str(op, 'to', args[2]) };
         return handle(part(command({ op: 'placeLeads', type, pins })));
       }
       case 'board.chip': {

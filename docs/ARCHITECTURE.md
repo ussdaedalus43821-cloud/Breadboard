@@ -35,7 +35,8 @@ src/
                      footprint.ts (where a part's pins land)
     circuit/         circuit.ts (Circuit, supplies, occupancy, circuitNetlist,
                      benchCircuit), commands.ts (the edit dispatcher: place,
-                     placeLeads, wire, power, ground, set, remove)
+                     placeLeads, wire, power, ground, set, setResistance,
+                     remove), save.ts (save format, §6), history.ts (undo/redo)
     sim/             solver.ts: Stage-2 electrical solver (§4a); electrical.ts
                      (constants); mna.ts (linear solve); engine.ts: ticks,
                      propagation delay, LED burn-out (§4b)
@@ -59,10 +60,13 @@ src/
   ui/              everything that touches the DOM or a canvas
     canvas/          board-renderer.ts, board-layout.ts, part-shapes.ts
     editor/          editor.ts: palette tool, click-to-place, drag-to-wire,
-                     click-to-toggle switches (no DOM)
+                     select (inspector), click-to-toggle switches (no DOM)
+    persistence/     storage.ts (named saves in localStorage), share.ts
+                     (the #circuit=… URL codec)
     worker-circuit-host.ts  CircuitHost over the sim-worker protocol
     nova-client.ts   lazy nova worker start, bridge hookup, the watchdog
-    panels/          scripting-panel.ts; the palette is plain HTML in index.html
+    panels/          scripting-panel.ts, inspector.ts; the palette and toolbars
+                     are plain HTML in index.html
   main.ts          entry point: wires the UI to the workers
 ```
 
@@ -338,7 +342,7 @@ pixels, so domain code never knows about pixels.
 - The size is a config flag: `boardSpec('half')` or `boardSpec('full')`.
   Nothing else in the code assumes 30 rows.
 
-## 6. Save format (implemented in Phase 5, defined now)
+## 6. Save format (`domain/circuit/save.ts`)
 
 Saves are JSON, versioned and **declarative**. They record what the user
 built. Derived data (the netlist) and transient sim state (net levels,
@@ -372,10 +376,47 @@ Rules:
 - `version` bumps on any incompatible change. The loader carries a chain
   of `migrate_vN_to_vN+1` functions in `domain/`, and old saves are never
   rejected silently.
-- Loading a save means replaying it through the same command dispatcher
-  the UI and NovaLang use, so there is one validation path. Shareable URLs
-  (Phase 5) are the same JSON, compressed and base64url-encoded in the
-  fragment.
+- Loading a save (`fromSave`) means replaying it through the same command
+  dispatcher the UI and NovaLang use, so there is one validation path, and
+  a damaged or hand-edited save is refused with the dispatcher's own
+  message ("part D2: hole:a1 already holds pin:D1:anode"). **Ids are
+  kept**: before each placement the id counter is steered to the saved id,
+  so scripts that name `SW1` or `D2` work on a loaded circuit. Afterwards,
+  ids continue past the highest saved number and are never reused.
+- `toSave` writes `meta.title` and `meta.created`. Everything else in a save
+  is the circuit.
+- **Where saves go** (main thread, `ui/persistence/`): named slots in
+  `localStorage` under `breadboard:circuit:<name>`, with every access
+  guarded, since storage can be missing or throw. **Shareable URLs** carry
+  the same JSON, deflate-raw compressed (`CompressionStream`) and
+  base64url-encoded, in the fragment: `#circuit=1.<data>`, where `1.` is
+  the encoding version. The fragment never reaches a server. The half
+  adder is about 720 characters. Opening such a link loads the circuit
+  once the sim worker is up.
+- Loading, from storage or a link, goes to the sim worker as a `load`
+  request and is one undoable edit (§6a).
+
+## 6a. Undo and redo
+
+The sim worker owns history (`domain/circuit/history.ts`), because it owns
+the circuit. Circuits are immutable values, so an entry is the circuit as it
+was before an edit, plus a label for the UI ("place D1", "remove R2",
+"change R3", "clear board", "load circuit", "script run").
+
+- **Recorded:** every dispatcher edit except switch flips, plus Clear board
+  (`reset`) and loads. A switch flip is operating the circuit, as pressing
+  a real switch is not editing the board, so it never clutters the history
+  (D-036).
+- **Groups:** `group open` … `group close` makes everything in between one
+  entry. Script runs and the demo loader use it, so one Ctrl+Z undoes a
+  whole `half_adder.nova`. Undo and redo are refused while a group is open.
+- Undo/redo replace the circuit and keep sim time. Chip outputs and burnt
+  LEDs carry over for parts that still exist, as after any edit. The
+  history holds at most 200 entries and starts empty with each session
+  (`hello`).
+- Every frame carries `history: { canUndo, canRedo, undoLabel, redoLabel }`
+  for the buttons. Ctrl+Z, and Ctrl+Y or Ctrl+Shift+Z, work everywhere
+  except in text fields, which keep their own undo.
 
 ## 7. Phases
 
@@ -391,7 +432,7 @@ One phase per session. Each ends with green tests, a demo script in
 | 3     | 74xx chips as data (7400, then 7402/7404/7408 from one `gate.ts` builder). Half-adder demo                      |
 | 4     | Stage-2 electrical: resistor-limited LED current, drive-strength contention warnings                            |
 | 4.5   | NovaLang integration per `NOVALANG_BRIDGE.md`. Additive only; `domain/` is not touched                          |
-| 5     | Save/load, undo/redo, inspector, zoom/pan, shareable URLs                                                       |
+| 5     | Save/load, undo/redo, inspector (resistor values), shareable URLs. Zoom/pan deferred (D-038)                    |
 
 ## 8. NovaLang as a dependency
 

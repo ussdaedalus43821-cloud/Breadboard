@@ -5,6 +5,8 @@
 
 import { benchCircuit, emptyCircuit, type Circuit } from '../domain/circuit/circuit';
 import { applyCommand, type Command } from '../domain/circuit/commands';
+import { History } from '../domain/circuit/history';
+import { fromSave } from '../domain/circuit/save';
 import { Simulation } from '../domain/sim/engine';
 import {
   MAX_RUN_MS,
@@ -28,6 +30,7 @@ export class SimService {
   private running = false;
   private owedMs = 0;
   private sinceTimePush = 0;
+  private readonly history = new History();
 
   /** Read-only view for queries (the bridge's sim.* calls). */
   get state(): {
@@ -55,14 +58,54 @@ export class SimService {
               : benchCircuit(req.size, options);
           this.sim = new Simulation(this.circuit);
           this.owedMs = 0;
+          this.history.clear(); // a new session starts with nothing to undo
           return [...this.publish(true), this.ok(id, {})];
         }
         case 'command': {
-          const result = applyCommand(this.circuit, req.cmd as Command);
+          const cmd = req.cmd as Command;
+          const result = applyCommand(this.circuit, cmd);
           if (!result.ok) return [this.fail(id, result.error.code, result.error.message)];
-          this.circuit = result.circuit;
-          this.sim.load(this.circuit);
+          const label = editLabel(cmd, result.id);
+          if (label) this.history.record(this.circuit, label);
+          this.replace(result.circuit);
           return [...this.publish(true), this.ok(id, { id: result.id })];
+        }
+        case 'reset': {
+          if (req.size !== 'half' && req.size !== 'full') {
+            return [this.fail(id, 'BAD_ARGS', `bad board size ${JSON.stringify(req.size)}`)];
+          }
+          this.history.record(this.circuit, 'clear board');
+          this.circuit = req.preset === 'empty' ? emptyCircuit(req.size) : benchCircuit(req.size);
+          // A fresh board starts a fresh sim: time 0 ("since the last board.new").
+          this.sim = new Simulation(this.circuit);
+          this.owedMs = 0;
+          return [...this.publish(true), this.ok(id, {})];
+        }
+        case 'load': {
+          const loaded = fromSave(req.save);
+          if (!loaded.ok) return [this.fail(id, 'BAD_ARGS', loaded.error)];
+          this.history.record(this.circuit, 'load circuit');
+          this.replace(loaded.circuit);
+          return [...this.publish(true), this.ok(id, {})];
+        }
+        case 'undo':
+        case 'redo': {
+          if (this.history.grouping) {
+            return [this.fail(id, 'BAD_REQUEST', `cannot ${req.kind} while a script is running`)];
+          }
+          const entry =
+            req.kind === 'undo' ? this.history.undo(this.circuit) : this.history.redo(this.circuit);
+          if (!entry) return [this.fail(id, 'BAD_REQUEST', `nothing to ${req.kind}`)];
+          this.replace(entry.circuit);
+          return [...this.publish(true), this.ok(id, { id: entry.label })];
+        }
+        case 'group': {
+          if (req.open) {
+            this.history.begin(this.circuit, req.label ?? 'script');
+            return [this.ok(id, {})];
+          }
+          this.history.end(this.circuit);
+          return [...this.publish(false), this.ok(id, {})];
         }
         case 'step': {
           const n = req.ticks;
@@ -123,6 +166,12 @@ export class SimService {
     return [{ v: 1, kind: 'time', time: this.sim.time, running: this.running }];
   }
 
+  /** Swap in another circuit; sim time and surviving chip/LED state carry on. */
+  private replace(circuit: Circuit): void {
+    this.circuit = circuit;
+    this.sim.load(circuit);
+  }
+
   private advanceBy(id: number, ticks: number): SimMessage[] {
     this.sim.step(ticks);
     return [...this.publish(false), this.ok(id, { time: this.sim.time })];
@@ -140,6 +189,7 @@ export class SimService {
         time: this.sim.time,
         settled: this.sim.settled,
         running: this.running,
+        history: this.history.state,
         ...this.sim.result,
       },
     };
@@ -154,6 +204,25 @@ export class SimService {
 
   private fail(id: number, code: SimErrorCode, message: string): SimResponse {
     return { v: 1, kind: 'response', id, ok: false, error: { code, message } };
+  }
+}
+
+/**
+ * The undo label for an edit, or null if it is not an edit. Flipping a switch
+ * is operating the circuit, not changing it, so it is not recorded (D-036).
+ */
+function editLabel(cmd: Command, id: string): string | null {
+  switch (cmd.op) {
+    case 'set':
+      return null;
+    case 'remove':
+      return `remove ${id}`;
+    case 'setResistance':
+      return `change ${id}`;
+    case 'wire':
+      return `wire ${id}`;
+    default:
+      return `place ${id}`;
   }
 }
 

@@ -5,6 +5,10 @@ import { HALF_ADDER } from './domain/demos/half-adder';
 import type { PortLike } from './protocol/sim-protocol';
 import { NovaClient } from './ui/nova-client';
 import { mountScriptingPanel } from './ui/panels/scripting-panel';
+import { mountInspector } from './ui/panels/inspector';
+import { toSave } from './domain/circuit/save';
+import { decodeShareHash, encodeShareHash } from './ui/persistence/share';
+import { deleteSave, listSaves, readSave, writeSave } from './ui/persistence/storage';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#board')!;
 const status = document.querySelector<HTMLDivElement>('#status')!;
@@ -25,13 +29,21 @@ let pointer: { x: number; y: number } | null = null;
 let renderer: BoardRenderer | null = null;
 let frame = 0;
 let shownWarnings = '';
+let renderInspector: () => void = () => {};
+const undoButton = document.querySelector<HTMLButtonElement>('#undo')!;
+const redoButton = document.querySelector<HTMLButtonElement>('#redo')!;
 
 const editor = new Editor(host, () => {
   if (frame) return;
   frame = requestAnimationFrame(() => {
     frame = 0;
+    // A loaded save may use the other board size.
+    if (renderer && renderer.spec.size !== editor.current.spec.size) {
+      renderer = new BoardRenderer(canvas, editor.current.spec);
+    }
     renderer?.draw({
       circuit: editor.current,
+      selected: editor.selected,
       frame: editor.frame,
       preview: editor.preview(),
       hover: editor.hover,
@@ -43,7 +55,12 @@ const editor = new Editor(host, () => {
       clock.textContent = `t = ${f.time.ms} ms`;
       runToggle.textContent = f.running ? 'Pause' : 'Run';
       stepButton.disabled = f.running;
+      undoButton.disabled = !f.history.canUndo;
+      redoButton.disabled = !f.history.canRedo;
+      undoButton.title = f.history.undoLabel ? `Undo ${f.history.undoLabel} (Ctrl+Z)` : 'Ctrl+Z';
+      redoButton.title = f.history.redoLabel ? `Redo ${f.history.redoLabel} (Ctrl+Y)` : 'Ctrl+Y';
     }
+    renderInspector();
     hoverLine.textContent = editor.hoverInfo();
     const warnings = editor.frame?.warnings ?? [];
     const text = warnings.map((w) => `${w.code}: ${w.message}`).join('\n');
@@ -83,18 +100,24 @@ palette.addEventListener('click', (e) => {
 runToggle.addEventListener('click', () => void host.setRunning(!(editor.frame?.running ?? true)));
 stepButton.addEventListener('click', () => void host.step(1));
 document.querySelector('#clear-board')!.addEventListener('click', () => {
-  void host.reset({ size, preset: 'bench' }).then(() => host.setRunning(true));
+  void host
+    .clear({ size, preset: 'bench' })
+    .then(() => editor.say('Cleared. Ctrl+Z brings it back.'));
 });
 document.querySelector('#load-demo')!.addEventListener('click', async () => {
-  await host.reset({ size, preset: 'bench' });
-  for (const cmd of HALF_ADDER.commands) {
-    const r = await host.apply(cmd);
-    if (!r.ok) {
-      editor.say(`Demo failed at ${cmd.op}: ${r.error.message}`);
-      return;
+  await host.group(true, 'load demo'); // the whole demo undoes as one step
+  try {
+    await host.clear({ size, preset: 'bench' });
+    for (const cmd of HALF_ADDER.commands) {
+      const r = await host.apply(cmd);
+      if (!r.ok) {
+        editor.say(`Demo failed at ${cmd.op}: ${r.error.message}`);
+        return;
+      }
     }
+  } finally {
+    await host.group(false);
   }
-  await host.setRunning(true);
   palette.querySelector<HTMLButtonElement>('[data-tool="select"]')!.click();
   editor.say(`${HALF_ADDER.title}: click SW1 (A) and SW2 (B). D1 = sum, D2 = carry.`);
 });
@@ -155,3 +178,125 @@ window.addEventListener('keydown', (e) => {
     palette.querySelector<HTMLButtonElement>('[data-tool="select"]')!.click();
   }
 });
+
+// ---- Undo / redo -------------------------------------------------------------
+
+const undo = async (): Promise<void> => {
+  const r = await host.undo();
+  editor.say(r.ok ? `Undid ${r.id}.` : r.error.message);
+};
+const redo = async (): Promise<void> => {
+  const r = await host.redo();
+  editor.say(r.ok ? `Redid ${r.id}.` : r.error.message);
+};
+undoButton.addEventListener('click', () => void undo());
+redoButton.addEventListener('click', () => void redo());
+window.addEventListener('keydown', (e) => {
+  // Text fields (the script editor) keep their own undo.
+  const t = e.target as HTMLElement | null;
+  if (t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName))) return;
+  const mod = e.ctrlKey || e.metaKey;
+  const key = e.key.toLowerCase();
+  if (mod && key === 'z' && !e.shiftKey) {
+    e.preventDefault();
+    void undo();
+  } else if (mod && (key === 'y' || (key === 'z' && e.shiftKey))) {
+    e.preventDefault();
+    void redo();
+  } else if ((e.key === 'Delete' || e.key === 'Backspace') && editor.selected) {
+    e.preventDefault();
+    void editor.removeSelected();
+  }
+});
+
+// ---- Inspector -----------------------------------------------------------------
+
+renderInspector = mountInspector(document.querySelector<HTMLElement>('#inspector')!, editor);
+
+// ---- Save / load / share ---------------------------------------------------
+
+const saveName = document.querySelector<HTMLInputElement>('#save-name')!;
+const savedList = document.querySelector<HTMLSelectElement>('#saved-list')!;
+const shareUrl = document.querySelector<HTMLInputElement>('#share-url')!;
+
+function refreshSaves(select?: string): void {
+  const saves = listSaves();
+  savedList.replaceChildren(
+    ...saves.map((s) => {
+      const o = document.createElement('option');
+      o.value = s.name;
+      o.textContent = s.name;
+      return o;
+    }),
+  );
+  if (saves.length === 0) {
+    const o = document.createElement('option');
+    o.textContent = '(no saved circuits)';
+    o.value = '';
+    savedList.append(o);
+  }
+  if (select) savedList.value = select;
+}
+refreshSaves();
+
+async function loadSave(save: unknown, what: string): Promise<void> {
+  const r = await host.load(save);
+  editor.say(
+    r.ok ? `Loaded ${what}. Ctrl+Z goes back.` : `Could not load ${what}: ${r.error.message}`,
+  );
+}
+
+document.querySelector('#save')!.addEventListener('click', () => {
+  const name = saveName.value.trim() || 'My circuit';
+  const error = writeSave(
+    name,
+    toSave(editor.current, { title: name, created: new Date().toISOString() }),
+  );
+  editor.say(error ?? `Saved "${name}" in this browser.`);
+  refreshSaves(name);
+});
+document.querySelector('#load')!.addEventListener('click', () => {
+  const name = savedList.value;
+  if (!name) return;
+  const save = readSave(name);
+  if (save === null) {
+    editor.say(`"${name}" could not be read.`);
+    return;
+  }
+  saveName.value = name;
+  void loadSave(save, `"${name}"`);
+});
+document.querySelector('#delete-save')!.addEventListener('click', () => {
+  const name = savedList.value;
+  if (!name) return;
+  deleteSave(name);
+  refreshSaves();
+  editor.say(`Deleted "${name}".`);
+});
+document.querySelector('#export-url')!.addEventListener('click', async () => {
+  const hash = await encodeShareHash(toSave(editor.current, { created: new Date().toISOString() }));
+  history.replaceState(null, '', hash);
+  shareUrl.value = location.href;
+  shareUrl.hidden = false;
+  shareUrl.select();
+  try {
+    await navigator.clipboard.writeText(location.href);
+    editor.say(
+      `Link copied (${location.href.length} characters). Anyone who opens it gets this circuit.`,
+    );
+  } catch {
+    editor.say('Link ready: copy it from the box.');
+  }
+});
+
+// A shared link opens its circuit.
+async function openSharedLink(): Promise<void> {
+  try {
+    const save = await decodeShareHash(location.hash);
+    if (save !== null) await loadSave(save, 'the shared circuit');
+  } catch (e) {
+    editor.say(e instanceof Error ? e.message : String(e));
+  }
+}
+void openSharedLink();
+window.addEventListener('hashchange', () => void openSharedLink());

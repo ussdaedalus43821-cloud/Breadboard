@@ -52,6 +52,35 @@ export class WorkerCircuitHost implements CircuitHost {
     return r.ok ? { ok: true, id: r.result.id ?? '' } : r;
   }
 
+  clear(options: ResetOptions = {}): Promise<HostResult> {
+    return this.plain({
+      kind: 'reset',
+      size: options.size ?? 'half',
+      preset: options.preset ?? 'bench',
+    });
+  }
+
+  load(save: unknown): Promise<HostResult> {
+    return this.plain({ kind: 'load', save });
+  }
+
+  undo(): Promise<HostResult> {
+    return this.plain({ kind: 'undo' });
+  }
+
+  redo(): Promise<HostResult> {
+    return this.plain({ kind: 'redo' });
+  }
+
+  group(open: boolean, label?: string): Promise<HostResult> {
+    return this.plain({ kind: 'group', open, ...(label === undefined ? {} : { label }) });
+  }
+
+  private async plain(body: DistributiveOmit<SimRequest, 'v' | 'id'>): Promise<HostResult> {
+    const r = await this.request(body);
+    return r.ok ? { ok: true, id: r.result.id ?? '' } : r;
+  }
+
   step(ticks: number): Promise<TimeResult> {
     return this.timed({ kind: 'step', ticks });
   }

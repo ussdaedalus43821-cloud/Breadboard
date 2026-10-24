@@ -88,6 +88,7 @@ export function mountScriptingPanel(
     // Scripts move time only with board.run / board.step (D-023).
     const wasRunning = isClockRunning();
     await host.setRunning(false);
+    await host.group(true, 'script run'); // one Ctrl+Z undoes the whole run
     try {
       const result = await client.run(el.source.value, {
         timeoutMs: Number(el.timeout.value) || DEFAULT_TIMEOUT_MS,
@@ -112,6 +113,7 @@ export function mountScriptingPanel(
     } finally {
       el.run.disabled = false;
       el.stop.disabled = true;
+      await host.group(false);
       if (wasRunning) await host.setRunning(true);
     }
   });

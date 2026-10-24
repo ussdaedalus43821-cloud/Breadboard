@@ -3,6 +3,15 @@
 import { CHIPS } from '../chips/catalog';
 import type { PartDef } from './types';
 
+/** The resistor values Breadboard stocks, smallest first. */
+export const RESISTOR_VALUES: readonly number[] = [100, 330, 1000, 10_000];
+
+/** Registry type for a resistance, or undefined if it is not stocked. */
+export function resistorType(ohms: unknown): string | undefined {
+  if (typeof ohms !== 'number' || !RESISTOR_VALUES.includes(ohms)) return undefined;
+  return ohms === 330 ? 'resistor' : `resistor-${ohms >= 1000 ? `${ohms / 1000}k` : ohms}`;
+}
+
 /** Format a resistance the way it is printed: 330 Ω, 1 kΩ, 10 kΩ. */
 export function formatOhms(ohms: number): string {
   return ohms >= 1000 ? `${ohms / 1000} kΩ` : `${ohms} Ω`;

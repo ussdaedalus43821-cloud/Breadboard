@@ -25,6 +25,8 @@ export interface Scene {
   readonly preview?: Preview;
   /** Hole under the pointer, outlined. */
   readonly hover?: BoardTerminal | null;
+  /** Part id the inspector is showing: outlined. */
+  readonly selected?: string | null;
   /** Free-floating wire end (pixels) while dragging off any hole. */
   readonly pointer?: { readonly x: number; readonly y: number } | null;
 }
@@ -159,6 +161,25 @@ export class BoardRenderer {
         });
       }
       for (const supply of circuit.supplies) drawSupply(ctx, spec, layout, supply);
+
+      const sel = scene.selected ? circuit.parts.find((p) => p.id === scene.selected) : undefined;
+      if (sel) {
+        const pts = Object.values(sel.pins).map((t) => layout.toPixel(terminalPosition(spec, t)));
+        const xs = pts.map((p) => p.x);
+        const ys = pts.map((p) => p.y);
+        const pad = px * 0.75;
+        ctx.save();
+        ctx.setLineDash([4, 3]);
+        ctx.strokeStyle = THEME.holeSelected;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(
+          Math.min(...xs) - pad,
+          Math.min(...ys) - pad,
+          Math.max(...xs) - Math.min(...xs) + 2 * pad,
+          Math.max(...ys) - Math.min(...ys) + 2 * pad,
+        );
+        ctx.restore();
+      }
     }
 
     if (preview?.kind === 'part' && preview.pins) {
