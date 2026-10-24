@@ -7,6 +7,7 @@ import { benchCircuit, emptyCircuit, type Circuit } from '../domain/circuit/circ
 import { applyCommand, type Command } from '../domain/circuit/commands';
 import { History } from '../domain/circuit/history';
 import { fromSave } from '../domain/circuit/save';
+import { MAX_PROBES, Trace } from './trace';
 import { Simulation } from '../domain/sim/engine';
 import {
   MAX_RUN_MS,
@@ -20,6 +21,8 @@ import {
 
 /** Real-time catch-up is capped so a backgrounded tab does not replay minutes of ticks. */
 const MAX_CATCH_UP_TICKS = 250;
+/** Minimum wall-clock gap between frames while the real-time clock runs (~60/s). */
+const FRAME_MS = 16;
 /** Minimum wall-clock gap between `time` pushes when nothing else changed. */
 const TIME_PUSH_MS = 100;
 
@@ -30,7 +33,10 @@ export class SimService {
   private running = false;
   private owedMs = 0;
   private sinceTimePush = 0;
+  private sinceFrame = 0;
+  private dirty = false;
   private readonly history = new History();
+  private readonly trace = new Trace();
 
   /** Read-only view for queries (the bridge's sim.* calls). */
   get state(): {
@@ -99,6 +105,17 @@ export class SimService {
           this.replace(entry.circuit);
           return [...this.publish(true), this.ok(id, { id: entry.label })];
         }
+        case 'probes': {
+          const keys = Array.isArray(req.terminals) ? req.terminals : [];
+          if (keys.length > MAX_PROBES || !keys.every((k) => typeof k === 'string')) {
+            return [
+              this.fail(id, 'BAD_ARGS', `the analyzer takes up to ${MAX_PROBES} terminal keys`),
+            ];
+          }
+          this.trace.setProbes(keys);
+          this.sampleNow();
+          return [...this.publish(false), this.ok(id, {})];
+        }
         case 'group': {
           if (req.open) {
             this.history.begin(this.circuit, req.label ?? 'script');
@@ -156,10 +173,15 @@ export class SimService {
   advance(elapsedMs: number): SimMessage[] {
     if (!this.running) return [];
     this.owedMs += elapsedMs;
+    this.sinceFrame += elapsedMs;
     const n = Math.min(Math.floor(this.owedMs), MAX_CATCH_UP_TICKS);
     this.owedMs = n === MAX_CATCH_UP_TICKS ? 0 : this.owedMs - n;
     if (n === 0) return [];
-    if (this.sim.step(n)) return this.publish(false);
+    // A probed analyzer scrolls even when nothing changes.
+    if (this.sim.step(n, this.onTick) || this.trace.active) this.dirty = true;
+    // At most ~60 frames a second while the clock runs: a fast clock lead
+    // would otherwise change something on every 4 ms wake-up.
+    if (this.dirty) return this.sinceFrame >= FRAME_MS ? this.publish(false) : [];
     this.sinceTimePush += elapsedMs;
     if (this.sinceTimePush < TIME_PUSH_MS) return [];
     this.sinceTimePush = 0;
@@ -170,10 +192,20 @@ export class SimService {
   private replace(circuit: Circuit): void {
     this.circuit = circuit;
     this.sim.load(circuit);
+    this.sampleNow();
+  }
+
+  /** Per-tick hook: the analyzer samples every tick. */
+  private readonly onTick = (tick: number): void =>
+    this.trace.sample(tick, (k) => this.sim.levelOf(k));
+
+  /** Re-sample the current tick (an edit changed levels without moving time). */
+  private sampleNow(): void {
+    this.onTick(this.sim.time.ticks);
   }
 
   private advanceBy(id: number, ticks: number): SimMessage[] {
-    this.sim.step(ticks);
+    this.sim.step(ticks, this.onTick);
     return [...this.publish(false), this.ok(id, { time: this.sim.time })];
   }
 
@@ -181,6 +213,8 @@ export class SimService {
   private publish(circuitChanged: boolean): SimMessage[] {
     const revision = ++this.revision;
     this.sinceTimePush = 0;
+    this.sinceFrame = 0;
+    this.dirty = false;
     const frame: SimMessage = {
       v: 1,
       kind: 'frame',
@@ -190,6 +224,7 @@ export class SimService {
         settled: this.sim.settled,
         running: this.running,
         history: this.history.state,
+        trace: this.trace.frame(),
         ...this.sim.result,
       },
     };

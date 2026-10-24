@@ -141,13 +141,20 @@ export function circuitNetlist(circuit: Circuit): Netlist {
 }
 
 /**
- * The part whose body covers pitch point (x, y): the pins' bounding box plus
- * half a pitch. Last placed wins, matching draw order.
+ * The part under pitch point (x, y). A fixed footprint (chip, switch, display)
+ * is hit anywhere in its pins' bounding box plus half a pitch; a flexible-lead
+ * part (LED, resistor) only near the line between its leads, so a long
+ * diagonal resistor does not swallow clicks on whatever it crosses. Last
+ * placed wins, matching draw order.
  */
 export function partAtPoint(circuit: Circuit, x: number, y: number): PlacedPart | undefined {
   for (let i = circuit.parts.length - 1; i >= 0; i--) {
     const part = circuit.parts[i]!;
     const ps = Object.values(part.pins).map((t) => terminalPosition(circuit.spec, t));
+    if (getPartDef(part.type).leads === 'flexible' && ps.length === 2) {
+      if (distanceToSegment(x, y, ps[0]!, ps[1]!) <= 0.5) return part;
+      continue;
+    }
     const xs = ps.map((p) => p.x);
     const ys = ps.map((p) => p.y);
     if (
@@ -160,4 +167,41 @@ export function partAtPoint(circuit: Circuit, x: number, y: number): PlacedPart 
     }
   }
   return undefined;
+}
+
+function distanceToSegment(
+  x: number,
+  y: number,
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy || 1;
+  const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / len2));
+  return Math.hypot(x - (a.x + t * dx), y - (a.y + t * dy));
+}
+
+/**
+ * The wire whose line passes within `radius` pitches of point (x, y), nearest
+ * first; ties go to the last drawn. For clicking a wire to probe it.
+ */
+export function wireAtPoint(
+  circuit: Circuit,
+  x: number,
+  y: number,
+  radius = 0.35,
+): Wire | undefined {
+  let best: Wire | undefined;
+  let bestDist = radius;
+  for (const w of circuit.wires) {
+    const d = distanceToSegment(
+      x,
+      y,
+      terminalPosition(circuit.spec, w.from),
+      terminalPosition(circuit.spec, w.to),
+    );
+    if (d <= bestDist) [best, bestDist] = [w, d];
+  }
+  return best;
 }

@@ -4,6 +4,7 @@
 import type { BoardSize } from '../domain/breadboard/spec';
 import type { Circuit } from '../domain/circuit/circuit';
 import type { HistoryState } from '../domain/circuit/history';
+import type { Level } from '../domain/sim/levels';
 import type { Command, CommandError } from '../domain/circuit/commands';
 import type { SimTime } from '../domain/sim/engine';
 import type { SimResult } from '../domain/sim/solver';
@@ -46,6 +47,13 @@ export type SimRequest =
   /** Replace the circuit with a save file (domain/circuit/save.ts), as one undoable edit. */
   | { readonly v: 1; readonly id: number; readonly kind: 'load'; readonly save: unknown }
   | { readonly v: 1; readonly id: number; readonly kind: 'undo' | 'redo' }
+  /** Logic analyzer: record these terminals (up to 4) every tick; replaces the list. */
+  | {
+      readonly v: 1;
+      readonly id: number;
+      readonly kind: 'probes';
+      readonly terminals: readonly string[];
+    }
   /** Open or close an undo group: every edit in between undoes as one (a script run). */
   | {
       readonly v: 1;
@@ -86,6 +94,8 @@ export interface SimFrame extends SimResult {
   /** The real-time clock is running. */
   readonly running: boolean;
   readonly history: HistoryState;
+  /** Logic analyzer: the last 50 ticks at each probed terminal. */
+  readonly trace: TraceFrame;
 }
 
 export type SimPush =
@@ -101,3 +111,12 @@ export type SimPush =
 
 /** Sim worker → main thread. Pushes for a change always arrive before its response. */
 export type SimMessage = SimResponse | SimPush;
+
+/** Logic-analyzer data in a frame (recorded by the sim worker's Trace). */
+export interface TraceFrame {
+  readonly probes: readonly string[];
+  /** The tick of each sample, oldest first (at most 50). */
+  readonly ticks: readonly number[];
+  /** levels[p][i]: probe p at ticks[i]. */
+  readonly levels: readonly (readonly Level[])[];
+}

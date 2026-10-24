@@ -47,6 +47,8 @@ export interface CircuitHost {
   load(save: unknown): Promise<HostResult>;
   undo(): Promise<HostResult>;
   redo(): Promise<HostResult>;
+  /** Logic analyzer: probe these terminals (up to 4); replaces the list. */
+  setProbes(terminals: readonly string[]): Promise<HostResult>;
   /** Open (true) or close (false) an undo group: everything in between undoes as one. */
   group(open: boolean, label?: string): Promise<HostResult>;
 }

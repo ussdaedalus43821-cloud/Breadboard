@@ -39,6 +39,37 @@
         border-color: #ff9f1c;
         color: #1b1b1b;
       }
+      #analyzer {
+        margin-top: 14px;
+        max-width: 920px;
+        border: 1px solid #4a4d55;
+        border-radius: 8px;
+        background: #26272b;
+        padding: 6px 10px 10px;
+      }
+      #analyzer summary {
+        cursor: pointer;
+        font-family: ui-monospace, monospace;
+        padding: 4px 0;
+      }
+      .analyzer-hint {
+        margin: 6px 0 0;
+        color: #9aa0a6;
+        font-size: 13px;
+      }
+      #analyzer-canvas {
+        display: block;
+        margin-top: 6px;
+        border-radius: 4px;
+      }
+      #demo-list {
+        font: inherit;
+        padding: 6px 8px;
+        border: 1px solid #4a4d55;
+        border-radius: 6px;
+        background: #383a40;
+        color: inherit;
+      }
       #sim-controls {
         display: flex;
         flex-wrap: wrap;
@@ -208,6 +239,9 @@
         <button type="button" data-tool="supply" data-supply="ground" aria-pressed="false">
           GND lead
         </button>
+        <button type="button" data-tool="supply" data-supply="clock" aria-pressed="false">
+          CLK lead
+        </button>
         <button type="button" data-tool="part" data-type="chip74hc00" aria-pressed="false">
           74HC00
         </button>
@@ -220,12 +254,32 @@
         <button type="button" data-tool="part" data-type="chip74hc08" aria-pressed="false">
           74HC08
         </button>
+        <button type="button" data-tool="part" data-type="chip74hc32" aria-pressed="false">
+          74HC32
+        </button>
+        <button type="button" data-tool="part" data-type="chip74hc86" aria-pressed="false">
+          74HC86
+        </button>
+        <button type="button" data-tool="part" data-type="chip74hc74" aria-pressed="false">
+          74HC74
+        </button>
+        <button type="button" data-tool="part" data-type="chip74hc4511" aria-pressed="false">
+          74HC4511
+        </button>
+        <button type="button" data-tool="part" data-type="display-7seg" aria-pressed="false">
+          7-segment
+        </button>
       </div>
       <div id="sim-controls" role="toolbar" aria-label="Simulation">
         <button type="button" id="run-toggle">Pause</button>
         <button type="button" id="step-1">Step 1 ms</button>
         <span id="clock">t = 0 ms</span>
-        <button type="button" id="load-demo">Load half-adder demo</button>
+        <select id="demo-list" aria-label="Demo circuit">
+          <option value="half-adder">Half adder</option>
+          <option value="flip-flop">D flip-flop</option>
+          <option value="decade-counter">Decade counter (full board)</option>
+        </select>
+        <button type="button" id="load-demo">Load demo</button>
         <button type="button" id="clear-board">Clear board</button>
       </div>
       <div id="circuit-controls" role="toolbar" aria-label="Circuit">
@@ -269,6 +323,9 @@
       <div id="status"></div>
       <div id="hover"></div>
       <ul id="warnings" aria-label="Warnings"></ul>
+      <details id="analyzer" open>
+        <summary>Logic analyzer (0/4)</summary>
+      </details>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>

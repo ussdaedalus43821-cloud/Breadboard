@@ -5,18 +5,27 @@
 
 import type { BoardTerminal, Point } from '../../domain/breadboard/spec';
 import { pin, terminalKey, type TerminalKey } from '../../domain/breadboard/terminal';
-import { occupancy, occupantId, partAtPoint, type Circuit } from '../../domain/circuit/circuit';
+import {
+  occupancy,
+  occupantId,
+  partAtPoint,
+  wireAtPoint,
+  type Circuit,
+} from '../../domain/circuit/circuit';
 import { applyCommand, type Command } from '../../domain/circuit/commands';
 import { footprintAt } from '../../domain/parts/footprint';
 import { getPartDef } from '../../domain/parts/registry';
 import type { Level } from '../../domain/sim/solver';
 import type { CircuitHost, SimFrame } from '../../protocol/circuit-host';
 
+/** Logic-analyzer channels (matches the sim worker's trace). */
+export const MAX_PROBES = 4;
+
 export type Tool =
   | { readonly kind: 'select' }
   | { readonly kind: 'part'; readonly type: string }
   | { readonly kind: 'wire' }
-  | { readonly kind: 'supply'; readonly supply: 'power' | 'ground' };
+  | { readonly kind: 'supply'; readonly supply: 'power' | 'ground' | 'clock' };
 
 /** What the renderer should draw on top of the circuit. */
 export type Preview =
@@ -37,8 +46,10 @@ export type Preview =
 export class Editor {
   tool: Tool = { kind: 'select' };
   hover: BoardTerminal | null = null;
-  /** Part shown in the inspector (Select tool). */
+  /** Part or supply lead shown in the inspector (Select tool). */
   selected: string | null = null;
+  /** Wires on the logic analyzer, in channel order (at most MAX_PROBES). */
+  probes: string[] = [];
   /** Status line text: last result or a hint. */
   message = 'Pick a part from the palette, then click a hole.';
   private dragFrom: BoardTerminal | null = null;
@@ -52,8 +63,15 @@ export class Editor {
   ) {
     host.subscribe((c) => {
       this.circuit = c;
-      // An undo or a load can take the selected part away.
-      if (this.selected && !c.parts.some((p) => p.id === this.selected)) this.selected = null;
+      // An undo or a load can take the selected part, or a probed wire, away.
+      if (this.selected && ![...c.parts, ...c.supplies].some((p) => p.id === this.selected)) {
+        this.selected = null;
+      }
+      const alive = this.probes.filter((id) => c.wires.some((w) => w.id === id));
+      if (alive.length !== this.probes.length) {
+        this.probes = alive;
+        void this.sendProbes();
+      }
       this.onChange();
     });
     host.subscribeFrames((f) => {
@@ -115,8 +133,10 @@ export class Editor {
         : tool.kind === 'wire'
           ? 'Wire: drag from one hole to another.'
           : tool.kind === 'supply'
-            ? `${tool.supply === 'power' ? '+5 V' : 'Ground'} lead: click a hole (normally a rail).`
-            : 'Select: click a part to inspect it (switches flip); Delete or right-click removes.';
+            ? tool.supply === 'clock'
+              ? 'Clock lead: click a hole. Select it afterwards to change its frequency.'
+              : `${tool.supply === 'power' ? '+5 V' : 'Ground'} lead: click a hole (normally a rail).`
+            : 'Select: click a part to inspect it (switches flip), a wire to probe it; Delete or right-click removes.';
     this.onChange();
   }
 
@@ -197,6 +217,38 @@ export class Editor {
     await this.run({ op: 'setResistance', id: this.selected, ohms }, 'Changed');
   }
 
+  /** Change the selected clock lead's period (the inspector's control). */
+  async setPeriod(periodTicks: number): Promise<void> {
+    if (!this.selected) return;
+    await this.run({ op: 'setPeriod', id: this.selected, periodTicks }, 'Changed');
+  }
+
+  /** Add a wire to the logic analyzer, or take it off. */
+  async toggleProbe(wireId: string): Promise<void> {
+    if (this.probes.includes(wireId)) {
+      this.probes = this.probes.filter((id) => id !== wireId);
+      this.message = `${wireId} off the analyzer.`;
+    } else if (this.probes.length >= MAX_PROBES) {
+      this.message = `The analyzer has ${MAX_PROBES} channels: click a probed wire to free one.`;
+      this.onChange();
+      return;
+    } else {
+      this.probes = [...this.probes, wireId];
+      this.message = `${wireId} on analyzer channel ${this.probes.length}.`;
+    }
+    await this.sendProbes();
+    this.onChange();
+  }
+
+  /** The analyzer samples each probed wire at its `from` end (a wire is one net). */
+  private async sendProbes(): Promise<void> {
+    const keys = this.probes.map((id) => {
+      const w = this.circuit?.wires.find((x) => x.id === id);
+      return w ? terminalKey(w.from) : '';
+    });
+    await this.host.setProbes(keys.filter(Boolean));
+  }
+
   /** Delete key: remove the selected part. */
   async removeSelected(): Promise<void> {
     if (!this.selected) return;
@@ -210,6 +262,22 @@ export class Editor {
   private async selectAt(t: BoardTerminal | null, point?: Point): Promise<void> {
     const c = this.current;
     const who = t ? occupancy(c).get(terminalKey(t)) : undefined;
+    if (who?.kind === 'supply') {
+      this.selected = who.supply;
+      this.message = `Selected ${who.supply}.`;
+      this.onChange();
+      return;
+    }
+    const wire =
+      who?.kind === 'wire'
+        ? c.wires.find((w) => w.id === who.wire)
+        : !who && point && !partAtPoint(c, point.x, point.y)
+          ? wireAtPoint(c, point.x, point.y)
+          : undefined;
+    if (wire) {
+      await this.toggleProbe(wire.id);
+      return;
+    }
     const part =
       who?.kind === 'pin'
         ? c.parts.find((p) => p.id === who.part)

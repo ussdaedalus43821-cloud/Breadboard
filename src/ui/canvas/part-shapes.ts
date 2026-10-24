@@ -31,6 +31,10 @@ export interface DrawStyle {
   readonly warn?: ReadonlySet<string>;
   /** LED: lit. */
   readonly lit?: boolean;
+  /** Display: each segment's glow (0…1) and whether it burnt out. */
+  readonly segments?: Readonly<
+    Record<string, { readonly brightness: number; readonly lit: boolean; readonly burnt: boolean }>
+  >;
   /** LED: glow, 0…1 of its rated current. */
   readonly brightness?: number;
   /** LED: destroyed by over-current. */
@@ -148,18 +152,20 @@ export function drawSupply(
   const p = px(spec, layout, supply.at);
   const pitch = layout.pitchPx;
   const power = supply.kind === 'power';
+  const clock = supply.kind === 'clock';
+  const color = clock ? '#2b8a3e' : power ? '#c92a2a' : '#212529';
   // Sized to fit in the board margin left of rail hole 1.
   const lead = pitch * 0.5;
   const w = pitch * 1.35;
   const h = pitch * 0.7;
   ctx.save();
-  ctx.strokeStyle = power ? '#c92a2a' : '#212529';
+  ctx.strokeStyle = color;
   ctx.lineWidth = pitch * 0.2;
   ctx.beginPath();
   ctx.moveTo(p.x, p.y);
   ctx.lineTo(p.x - lead, p.y);
   ctx.stroke();
-  ctx.fillStyle = power ? '#c92a2a' : '#212529';
+  ctx.fillStyle = color;
   ctx.beginPath();
   ctx.roundRect(p.x - lead - w, p.y - h / 2, w, h, h / 3);
   ctx.fill();
@@ -167,8 +173,8 @@ export function drawSupply(
   ctx.font = `bold ${Math.round(pitch * 0.38)}px ui-monospace, monospace`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(power ? '+5V' : 'GND', p.x - lead - w / 2, p.y);
-  pinDot(ctx, p, pitch * 0.17, false, power ? 1 : 0);
+  ctx.fillText(clock ? 'CLK' : power ? '+5V' : 'GND', p.x - lead - w / 2, p.y);
+  pinDot(ctx, p, pitch * 0.17, false, clock ? undefined : power ? 1 : 0);
   ctx.restore();
 }
 
@@ -266,6 +272,10 @@ export function drawPart(
       });
       break;
     }
+    case 'display': {
+      drawSevenSegment(ctx, pitch, points, style);
+      break;
+    }
     case 'switch':
     case 'chip': {
       const xs = points.map((p) => p.x);
@@ -337,5 +347,74 @@ export function drawPart(
       top - pitch * (def.kind === 'led' ? 1.25 : def.kind === 'chip' ? 0.5 : 0.6),
     );
   }
+  ctx.restore();
+}
+
+/**
+ * A 7-segment package spanning its two pin rows, with the digit drawn on it.
+ * Segment glow follows each segment's current; burnt segments go grey.
+ */
+function drawSevenSegment(
+  ctx: CanvasRenderingContext2D,
+  pitch: number,
+  points: readonly Point[],
+  style: DrawStyle,
+): void {
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+  const x0 = Math.min(...xs) - pitch * 0.5;
+  const x1 = Math.max(...xs) + pitch * 0.5;
+  const y0 = Math.min(...ys) - pitch * 0.5;
+  const y1 = Math.max(...ys) + pitch * 0.5;
+  ctx.fillStyle = '#1b1b1f';
+  ctx.beginPath();
+  ctx.roundRect(x0, y0, x1 - x0, y1 - y0, pitch * 0.2);
+  ctx.fill();
+
+  // The digit: a slanted-free classic layout in the middle of the package.
+  const h = (y1 - y0) * 0.78;
+  const w = h * 0.55;
+  const cx = (x0 + x1) / 2 - w * 0.1;
+  const top = (y0 + y1) / 2 - h / 2;
+  const t = Math.max(2, h * 0.11); // segment thickness
+  const left = cx - w / 2;
+  const right = cx + w / 2;
+  const mid = top + h / 2;
+  const bottom = top + h;
+  const bars: Record<string, [number, number, number, number]> = {
+    a: [left + t / 2, top, w - t, t],
+    g: [left + t / 2, mid - t / 2, w - t, t],
+    d: [left + t / 2, bottom - t, w - t, t],
+    f: [left, top + t / 2, t, h / 2 - t],
+    b: [right - t, top + t / 2, t, h / 2 - t],
+    e: [left, mid + t / 2, t, h / 2 - t],
+    c: [right - t, mid + t / 2, t, h / 2 - t],
+  };
+  const glow = (name: string): { fill: string; blur: number } => {
+    const seg = style.segments?.[name];
+    if (seg?.burnt) return { fill: '#4a4646', blur: 0 };
+    if (!seg?.lit) return { fill: '#3a1f22', blur: 0 };
+    const b = 0.45 + 0.55 * Math.min(1, seg.brightness * 2);
+    return {
+      fill: `rgba(255, ${Math.round(60 + 40 * b)}, ${Math.round(60 + 20 * b)}, ${b})`,
+      blur: pitch * 0.6 * b,
+    };
+  };
+  ctx.save();
+  for (const [name, [x, y, bw, bh]] of Object.entries(bars)) {
+    const g = glow(name);
+    ctx.shadowColor = 'rgba(255, 50, 50, 0.9)';
+    ctx.shadowBlur = g.blur;
+    ctx.fillStyle = g.fill;
+    ctx.beginPath();
+    ctx.roundRect(x, y, bw, bh, t / 2);
+    ctx.fill();
+  }
+  const dp = glow('dp');
+  ctx.shadowBlur = dp.blur;
+  ctx.fillStyle = dp.fill;
+  ctx.beginPath();
+  ctx.arc(right + t * 1.2, bottom - t / 2, t * 0.6, 0, Math.PI * 2);
+  ctx.fill();
   ctx.restore();
 }

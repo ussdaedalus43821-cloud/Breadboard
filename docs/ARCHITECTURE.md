@@ -40,9 +40,11 @@ src/
     sim/             solver.ts: Stage-2 electrical solver (§4a); electrical.ts
                      (constants); mna.ts (linear solve); engine.ts: ticks,
                      propagation delay, LED burn-out (§4b)
-    chips/           gate.ts (gate functions, ChipLogic, dipFootprint, the
-                     gateChip builder), catalog.ts (74HC00/02/04/08)
-    demos/           demo circuits as command lists (half-adder.ts)
+    chips/           gate.ts (gate functions, Block, ChipLogic, dipFootprint,
+                     dipChip / gateChip builders), sequential.ts (74HC74,
+                     74HC4511), catalog.ts (every chip)
+    demos/           demo circuits as command lists (half-adder.ts,
+                     counter.ts: flip-flop and decade counter; index.ts)
   protocol/        JSON message types between main thread and workers:
                      sim-protocol.ts (requests, responses, circuit/frame pushes),
                      circuit-host.ts (the UI's one door into the Circuit),
@@ -65,7 +67,7 @@ src/
                      (the #circuit=… URL codec)
     worker-circuit-host.ts  CircuitHost over the sim-worker protocol
     nova-client.ts   lazy nova worker start, bridge hookup, the watchdog
-    panels/          scripting-panel.ts, inspector.ts; the palette and toolbars
+    panels/          scripting-panel.ts, inspector.ts, analyzer.ts; the palette and toolbars
                      are plain HTML in index.html
   main.ts          entry point: wires the UI to the workers
 ```
@@ -267,15 +269,39 @@ each `PinFootprint`, so chips declare what must not float (D-020).
 
 ## 4b. Chips and time
 
-**Chips are data.** `domain/chips/gate.ts` has the gate functions (`AND`,
-`OR`, `NAND`, `NOR`, `XOR`, `NOT`) and one builder, `gateChip`, that turns
-a 14-pin pinout table and a gate function into a `PartDef`. The builder
-supplies the footprint, pin roles, datasheet pin names (`1A`, `1Y`, …) and
-`logic: ChipLogic` (gates, VCC/GND pins, `delayTicks`).
-`domain/chips/catalog.ts` lists the 74HC00 (NAND), 74HC02 (NOR), 74HC04
-(NOT) and 74HC08 (AND). Adding a chip is one `gateChip(...)` call. Gate
-functions handle unknowns: a controlling input decides (`NAND(0, Z) = 1`);
-otherwise a floating or `X` input gives `X`.
+**Chips are data.** A chip's `logic` is a list of **blocks**
+(`domain/chips/gate.ts`). A block is a pure function from its input pins'
+levels and its own state to its output pins' levels and its next state. A
+gate is a stateless block. The 74HC74's flip-flops keep Q and the last CLK
+level, and the 74HC4511 keeps its latched code (D-039). `dipChip` builds any
+DIP chip from a pin table (role and datasheet name per pin) and its
+blocks. `gateChip` is the shortcut for 14-pin gate chips: a pinout table
+plus a gate function. `domain/chips/catalog.ts` lists them all:
+
+| Chip     | What                                                                | Built with                  |
+| -------- | ------------------------------------------------------------------- | --------------------------- |
+| 74HC00   | quad NAND                                                           | `gateChip`, 7400 pinout     |
+| 74HC02   | quad NOR (outputs first)                                            | `gateChip`, 7402 pinout     |
+| 74HC04   | hex inverter                                                        | `gateChip`                  |
+| 74HC08   | quad AND                                                            | `gateChip`, 7400 pinout     |
+| 74HC32   | quad OR                                                             | `gateChip`, 7400 pinout     |
+| 74HC86   | quad XOR                                                            | `gateChip`, 7400 pinout     |
+| 74HC74   | dual positive-edge D flip-flop, active-low PRE'/CLR'                | `dipChip` + `dFlipFlop` × 2 |
+| 74HC4511 | BCD to 7-segment latch/decoder (LT', BL', LE; 10–15 blank), 16 pins | `dipChip`                   |
+
+Gate functions handle unknowns: a controlling input decides
+(`NAND(0, Z) = 1`); otherwise a floating or `X` input gives `X`. A
+flip-flop **samples D only on a rising CLK edge** (CLK was 0 at the last
+evaluation and is 1 now), so a steady high or a falling clock changes
+nothing. PRE' and CLR' act at once. Flip-flops power up cleared, and an
+unknown PRE'/CLR' holds state (D-040).
+
+**Displays.** `display-7seg` is a common-cathode single digit (5161AS
+pinout, 10 pins, rows 0.6" apart: pin 1 in column `e`, the top row in
+column `i`). Each segment is an LED from its pin to the common cathode. The
+solver gives each segment its own current, brightness and burn-out
+(`DS1:a`), and the two COM pins are joined by the part's `internalNets`.
+Every segment needs its own series resistor, as on a real bench.
 
 **Time is ticks.** `domain/sim/engine.ts` wraps the solver in a fixed-step
 `Simulation`: **1 tick = 1 ms (1 kHz)**. Each chip output has a current
@@ -311,6 +337,18 @@ the current that killed it) and the circuit is solved again with that LED
 open, until nothing more burns. Burning is instant: it does not wait for a
 tick. The record is dropped only when the LED's part is removed, so fixing
 the circuit afterwards does not revive it, just as on a real bench.
+
+**Clock leads.** A third bench-supply kind: a function generator's 0/5 V
+square wave behind 50 Ω, high for the first half of each period
+(`periodTicks`, default 10 = 100 Hz). Because a clock lead changes level by
+itself, the engine re-solves at each of its edges (D-041).
+
+**The logic analyzer.** Up to 4 probed terminals (in the UI: click a wire
+with Select, which probes its `from` end). The sim worker samples them every
+tick into a 50-tick ring (`worker/trace.ts`), because only it sees every
+tick, and every frame carries the result (`trace`). The panel draws it
+right-aligned, newest tick at the right. While the clock runs with probes
+active, frames go out at about 60 per second, so it scrolls (D-042).
 
 **What the UI sees.** After every edit or step the worker pushes `circuit`
 (if it changed), then a `frame` (the `SimResult` plus `revision`, `time`,
@@ -424,15 +462,16 @@ One phase per session. Each ends with green tests, a demo script in
 `docs/demos/`, and acceptance encoded as Vitest integration tests under
 `tests/acceptance/`.
 
-| Phase | Scope                                                                                                           |
-| ----- | --------------------------------------------------------------------------------------------------------------- |
-| 0     | Skeleton, board spec, netlist, empty board render with hole hit-testing                                         |
-| 1     | Parts registry, click-to-place, drag-to-wire, palette                                                           |
-| 2     | Stage-1 logic sim in the sim worker (0/1/Z, floating-input warning). Switch → wire → LED lights. First playable |
-| 3     | 74xx chips as data (7400, then 7402/7404/7408 from one `gate.ts` builder). Half-adder demo                      |
-| 4     | Stage-2 electrical: resistor-limited LED current, drive-strength contention warnings                            |
-| 4.5   | NovaLang integration per `NOVALANG_BRIDGE.md`. Additive only; `domain/` is not touched                          |
-| 5     | Save/load, undo/redo, inspector (resistor values), shareable URLs. Zoom/pan deferred (D-038)                    |
+| Phase | Scope                                                                                                                     |
+| ----- | ------------------------------------------------------------------------------------------------------------------------- |
+| 0     | Skeleton, board spec, netlist, empty board render with hole hit-testing                                                   |
+| 1     | Parts registry, click-to-place, drag-to-wire, palette                                                                     |
+| 2     | Stage-1 logic sim in the sim worker (0/1/Z, floating-input warning). Switch → wire → LED lights. First playable           |
+| 3     | 74xx chips as data (7400, then 7402/7404/7408 from one `gate.ts` builder). Half-adder demo                                |
+| 4     | Stage-2 electrical: resistor-limited LED current, drive-strength contention warnings                                      |
+| 4.5   | NovaLang integration per `NOVALANG_BRIDGE.md`. Additive only; `domain/` is not touched                                    |
+| 5     | Save/load, undo/redo, inspector (resistor values), shareable URLs. Zoom/pan deferred (D-038)                              |
+| 6     | 74HC32/86, 74HC74 flip-flops, 74HC4511, 7-segment display, clock lead, logic analyzer; flip-flop and decade-counter demos |
 
 ## 8. NovaLang as a dependency
 

@@ -1,7 +1,8 @@
 import { BoardRenderer } from './ui/canvas/board-renderer';
 import { Editor, type Tool } from './ui/editor/editor';
 import { WorkerCircuitHost } from './ui/worker-circuit-host';
-import { HALF_ADDER } from './domain/demos/half-adder';
+import { DEMOS } from './domain/demos';
+import { mountAnalyzer } from './ui/panels/analyzer';
 import type { PortLike } from './protocol/sim-protocol';
 import { NovaClient } from './ui/nova-client';
 import { mountScriptingPanel } from './ui/panels/scripting-panel';
@@ -30,6 +31,7 @@ let renderer: BoardRenderer | null = null;
 let frame = 0;
 let shownWarnings = '';
 let renderInspector: () => void = () => {};
+let renderAnalyzer: () => void = () => {};
 const undoButton = document.querySelector<HTMLButtonElement>('#undo')!;
 const redoButton = document.querySelector<HTMLButtonElement>('#redo')!;
 
@@ -44,6 +46,7 @@ const editor = new Editor(host, () => {
     renderer?.draw({
       circuit: editor.current,
       selected: editor.selected,
+      probes: editor.probes,
       frame: editor.frame,
       preview: editor.preview(),
       hover: editor.hover,
@@ -61,6 +64,7 @@ const editor = new Editor(host, () => {
       redoButton.title = f.history.redoLabel ? `Redo ${f.history.redoLabel} (Ctrl+Y)` : 'Ctrl+Y';
     }
     renderInspector();
+    renderAnalyzer();
     hoverLine.textContent = editor.hoverInfo();
     const warnings = editor.frame?.warnings ?? [];
     const text = warnings.map((w) => `${w.code}: ${w.message}`).join('\n');
@@ -89,7 +93,15 @@ palette.addEventListener('click', (e) => {
       : kind === 'wire'
         ? { kind: 'wire' }
         : kind === 'supply'
-          ? { kind: 'supply', supply: button.dataset['supply'] === 'ground' ? 'ground' : 'power' }
+          ? {
+              kind: 'supply',
+              supply:
+                button.dataset['supply'] === 'ground'
+                  ? 'ground'
+                  : button.dataset['supply'] === 'clock'
+                    ? 'clock'
+                    : 'power',
+            }
           : { kind: 'select' };
   for (const b of palette.querySelectorAll('button')) {
     b.setAttribute('aria-pressed', String(b === button));
@@ -105,10 +117,11 @@ document.querySelector('#clear-board')!.addEventListener('click', () => {
     .then(() => editor.say('Cleared. Ctrl+Z brings it back.'));
 });
 document.querySelector('#load-demo')!.addEventListener('click', async () => {
+  const demo = DEMOS[document.querySelector<HTMLSelectElement>('#demo-list')!.value]!;
   await host.group(true, 'load demo'); // the whole demo undoes as one step
   try {
-    await host.clear({ size, preset: 'bench' });
-    for (const cmd of HALF_ADDER.commands) {
+    await host.clear({ size: demo.size ?? size, preset: 'bench' });
+    for (const cmd of demo.commands) {
       const r = await host.apply(cmd);
       if (!r.ok) {
         editor.say(`Demo failed at ${cmd.op}: ${r.error.message}`);
@@ -119,7 +132,13 @@ document.querySelector('#load-demo')!.addEventListener('click', async () => {
     await host.group(false);
   }
   palette.querySelector<HTMLButtonElement>('[data-tool="select"]')!.click();
-  editor.say(`${HALF_ADDER.title}: click SW1 (A) and SW2 (B). D1 = sum, D2 = carry.`);
+  const ins = Object.entries(demo.inputs)
+    .map(([name, id]) => `${id} = ${name}`)
+    .join(', ');
+  const outs = Object.entries(demo.outputs)
+    .map(([name, id]) => `${id} = ${name}`)
+    .join(', ');
+  editor.say(`${demo.title}. Click the switches (${ins}); watch ${outs}.`);
 });
 
 // NovaLang scripting: the nova worker starts the first time the panel opens.
@@ -212,6 +231,8 @@ window.addEventListener('keydown', (e) => {
 // ---- Inspector -----------------------------------------------------------------
 
 renderInspector = mountInspector(document.querySelector<HTMLElement>('#inspector')!, editor);
+renderAnalyzer = mountAnalyzer(document.querySelector<HTMLDetailsElement>('#analyzer')!, editor);
+document.querySelector('#analyzer')!.addEventListener('toggle', () => renderAnalyzer());
 
 // ---- Save / load / share ---------------------------------------------------
 

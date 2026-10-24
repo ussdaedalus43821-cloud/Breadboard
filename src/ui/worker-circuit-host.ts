@@ -64,6 +64,10 @@ export class WorkerCircuitHost implements CircuitHost {
     return this.plain({ kind: 'load', save });
   }
 
+  setProbes(terminals: readonly string[]): Promise<HostResult> {
+    return this.plain({ kind: 'probes', terminals });
+  }
+
   undo(): Promise<HostResult> {
     return this.plain({ kind: 'undo' });
   }

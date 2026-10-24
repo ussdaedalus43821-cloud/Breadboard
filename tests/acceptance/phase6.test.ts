@@ -318,3 +318,120 @@ describe('clock lead', () => {
     });
   });
 });
+
+describe('acceptance: the logic analyzer shows a clock as a square wave', () => {
+  async function analyzerRig() {
+    const { connectInProcess } = await import('../support/in-process-host');
+    const c = await connectInProcess({ preset: 'bench' });
+    let frame: import('../../src/protocol/sim-protocol').SimFrame | null = null;
+    c.host.subscribeFrames((f) => (frame = f));
+    const apply = async (...cmds: Command[]) => {
+      for (const cmd of cmds) {
+        const r = await c.host.apply(cmd);
+        if (!r.ok) throw new Error(r.error.message);
+      }
+    };
+    return { ...c, apply, frame: () => frame! };
+  }
+  const row = (levels: readonly unknown[]) => levels.map(String).join('');
+
+  it('records the last 50 ticks of a probed clock wire', async () => {
+    const a = await analyzerRig();
+    try {
+      await a.apply(
+        { op: 'clock', at: 'hole:a5', periodTicks: 10 }, // CLK1: 100 Hz
+        { op: 'wire', from: 'hole:b5', to: 'hole:b20' }, // W1 carries it
+      );
+      await a.host.setProbes(['hole:b5']);
+      await a.host.step(30);
+      let t = a.frame().trace;
+      expect(t.probes).toEqual(['hole:b5']);
+      expect(t.ticks).toEqual(Array.from({ length: 31 }, (_, i) => i)); // tick 0 (at probe time) to 30
+      expect(row(t.levels[0]!)).toBe('1111100000111110000011111000001');
+
+      await a.host.step(100);
+      t = a.frame().trace;
+      expect(t.ticks).toHaveLength(50); // only the last 50
+      expect(t.ticks.at(-1)).toBe(130);
+      // A square wave: runs of exactly 5 highs and 5 lows.
+      const runs = row(t.levels[0]!).match(/0+|1+/g)!;
+      expect(runs.slice(1, -1).every((r) => r.length === 5)).toBe(true);
+      expect(new Set(row(t.levels[0]!))).toEqual(new Set(['0', '1']));
+    } finally {
+      a.close();
+    }
+  });
+
+  it('up to 4 probes, each sampled every tick; edges line up with the flip-flop', async () => {
+    const a = await analyzerRig();
+    try {
+      // A 74HC74 toggling on a 20-tick clock: Q is a square wave at half the frequency.
+      await a.apply(
+        ...DFF.filter(
+          (cmd) =>
+            !(cmd.op === 'place' && cmd.type === 'switch-spdt') &&
+            !(cmd.op === 'wire' && /hole:[bc](3|4|5|20|21|22)$/.test(cmd.from)),
+        ),
+        { op: 'wire', from: 'pin:U1:6', to: 'pin:U1:2' }, // D = Q'
+        { op: 'clock', at: 'hole:a30', periodTicks: 20 },
+        { op: 'wire', from: 'hole:b30', to: 'pin:U1:3' },
+      );
+      await a.host.setProbes(['hole:c30', 'pin:U1:5']);
+      await a.host.step(49);
+      const [clk, out] = a.frame().trace.levels.map(row);
+      // Ticks 0–49 of a 20-tick clock: 10 high, 10 low, …
+      expect(clk).toBe(('1'.repeat(10) + '0'.repeat(10)).repeat(3).slice(0, 50));
+      // Q starts cleared and toggles one tick after each rising edge (ticks 20 and 40).
+      // At tick 0 the just-placed chip is not driving yet (Z): outputs settle after one tick.
+      expect(out).toBe('Z' + '0'.repeat(20) + '1'.repeat(20) + '0'.repeat(9));
+      expect(await a.host.setProbes(['a', 'b', 'c', 'd', 'e'])).toMatchObject({ ok: false });
+    } finally {
+      a.close();
+    }
+  });
+
+  it('the editor probes a wire by clicking it, end or middle; a removed wire drops off', async () => {
+    const { connectInProcess } = await import('../support/in-process-host');
+    const { Editor } = await import('../../src/ui/editor/editor');
+    const c = await connectInProcess({ preset: 'bench' });
+    try {
+      const editor = new Editor(c.host);
+      for (const cmd of [
+        { op: 'clock', at: 'hole:a5' },
+        { op: 'wire', from: 'hole:b5', to: 'hole:b20' },
+        { op: 'wire', from: 'hole:c5', to: 'hole:c25' },
+      ] as Command[]) {
+        await c.host.apply(cmd);
+      }
+      editor.setTool({ kind: 'select' });
+      await editor.pointerDown({ kind: 'hole', column: 'b', row: 5 }); // W1's end
+      await editor.pointerDown(null, { x: 14, y: 12 }); // the middle of W2 (row 15, column c)
+      expect(editor.probes).toEqual(['W1', 'W2']);
+      await editor.pointerDown({ kind: 'hole', column: 'b', row: 20 }); // W1 again: off
+      expect(editor.probes).toEqual(['W2']);
+      await c.host.apply({ op: 'remove', id: 'W2' });
+      expect(editor.probes).toEqual([]);
+      // Clicking the clock lead selects it for the inspector.
+      await editor.pointerDown({ kind: 'hole', column: 'a', row: 5 });
+      expect(editor.selected).toBe('CLK1');
+      await editor.setPeriod(100);
+      expect(editor.current.supplies.find((s) => s.id === 'CLK1')!.periodTicks).toBe(100);
+    } finally {
+      c.close();
+    }
+  });
+});
+
+describe('clicking parts', () => {
+  it('a long diagonal resistor does not swallow clicks on the display it crosses', async () => {
+    const { partAtPoint } = await import('../../src/domain/circuit/circuit');
+    const c = build(benchCircuit(DECADE_COUNTER.size), DECADE_COUNTER.commands);
+    expect(partAtPoint(c, 53, 7)?.id).toBe('DS1'); // the display body
+    // An isolated diagonal resistor: hit along its leads, not across its whole bounding box.
+    const lone = build(benchCircuit(), [
+      { op: 'placeLeads', type: 'resistor', pins: { '1': 'hole:a1', '2': 'hole:j21' } },
+    ]);
+    expect(partAtPoint(lone, 10, 8.5)?.id).toBe('R1'); // on the line from (0, 14) to (20, 3)
+    expect(partAtPoint(lone, 2, 4)).toBeUndefined(); // inside the box, far from the line
+  });
+});

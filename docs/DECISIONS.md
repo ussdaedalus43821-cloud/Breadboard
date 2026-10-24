@@ -372,3 +372,77 @@ picks a value with `board.resistor` and cannot yet change it afterwards.
 The original Phase 5 line listed zoom/pan. The Phase 5 brief did not, and
 at half size the board fits a laptop screen at the fixed 20 px pitch. It is
 a pure UI change (`createBoardLayout` already takes the pitch).
+
+## D-039 — Chip logic is a list of stateful blocks (Accepted, Phase 6)
+
+`ChipLogic.gates` became `ChipLogic.blocks`. A block is a pure
+`eval(inputLevels, state) → { outputs, state }`, and gates are the
+stateless case. The engine keeps each block's state (`<part>#<index>`),
+evaluates every block after every solve, and applies outputs after
+`delayTicks` with the same inertial rule as before. Because evaluation
+repeats on every solve, `eval` must be idempotent for unchanged inputs: an
+edge is a change between evaluations and is seen once. `dipChip` builds any
+DIP from a pin table, and `gateChip` is now a thin wrapper over it. This
+keeps chips as data (D-024) while allowing memory.
+
+## D-040 — 74HC74 power-up and unknown PRE'/CLR' (Accepted, Phase 6)
+
+Real 74HC74s power up in an arbitrary state. Breadboard's power up
+**cleared** (Q = 0), so counters start at 0 without a power-on-reset
+circuit. A floating or unknown PRE'/CLR' **holds** the stored state and
+ignores the clock (it does not become X). Real parts are unpredictable
+there, and the floating-input warning still flags a floating one. This
+matters at power-up. The sim's outputs start undriven for one tick, so a
+reset loop (NAND of two Qs into CLR', as in the decade counter) would
+otherwise see X, push every flip-flop to X, and never recover. Real chips
+settle in nanoseconds and never show that deadlock. With PRE' and CLR'
+both low, both outputs are high and Q is undefined once they are released.
+
+## D-041 — A function-generator clock lead, so the analyzer has a square wave to show (Accepted, Phase 6)
+
+At 1 kHz, the analyzer's 50 ticks are 50 ms. A switch flipped by hand is
+flat across that window, so "a square wave on a clock wire" needs a
+periodic source. The clock lead is a third supply kind, like the +5 V and
+ground leads: plugged into a hole, 0/5 V behind 50 Ω (a function
+generator's usual output impedance), with a period of 2 to 10 000 ticks
+(the UI offers 500, 100, 50, 10 and 1 Hz). `clock` places one, `setPeriod`
+changes it (undoable), and saves carry `periodTicks`. The engine re-solves
+at each of its edges. A 1 Hz clock lead also runs the decade counter by
+itself.
+
+## D-042 — The analyzer samples in the sim worker; frames are capped at ~60/s while running (Accepted, Phase 6)
+
+Only the sim worker sees every tick: frames are batched per wake-up. So it
+samples up to 4 probed terminals per tick into a 50-tick ring and sends the
+ring in every frame (`trace`). Edits re-sample the current tick. A fast
+clock lead changes something on every 4 ms wake-up, which used to mean a
+frame every 4 ms. While the real-time clock runs, frames are now sent at
+most every 16 ms. Probes keep the analyzer scrolling even when nothing
+else changes. Step and edits still publish at once. The panel puts each
+channel's samples in a `data-samples` attribute and its aria-label, for
+tests and screen readers.
+
+## D-043 — The decade counter needs a decoder and a reset (Accepted, Phase 6)
+
+The brief asked for a 4-bit counter of 74HC74s on a 7-segment display,
+counting 0–9. Done the real way, that takes two more things:
+
+- **A 74HC4511 BCD-to-7-segment decoder**, since the counter is binary and
+  the display needs seven segment lines. It was added as a chip.
+- **A NAND(Q1, Q3) into every CLR'** (one 74HC00 gate), which resets at
+  10, since a 4-bit counter would otherwise run on to 15.
+
+The demo is a ripple counter: each stage's Q' feeds its own D (toggle) and
+clocks the next stage, so it counts up. It also has seven 330 Ω segment
+resistors (7.6 mA each) and needs the full-size board (more than 30 rows of
+chips). The 7-segment display has the real 10-pin pinout: the brief's 7
+segment inputs and a common, plus the decimal point and a second, joined
+common pin.
+
+## D-044 — Flexible-lead parts are clicked along their leads (Accepted, Phase 6)
+
+`partAtPoint` used each part's bounding box. The decade counter's
+diagonal segment resistors cover the display's box, so clicking the
+display selected a resistor. LEDs and resistors are now hit within half a
+pitch of the line between their leads. Chips, switches and displays keep
+the box. Wires are hit the same way, which is how they are probed.

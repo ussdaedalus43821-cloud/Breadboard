@@ -17,6 +17,9 @@ import type { Preview } from '../editor/editor';
 import { createBoardLayout, type BoardLayout } from './board-layout';
 import { drawPart, drawSupply, drawWire } from './part-shapes';
 
+/** Analyzer channel colours, shared with the analyzer panel. */
+export const PROBE_COLORS = ['#ffd43b', '#63e6be', '#74c0fc', '#f783ac'];
+
 /** Everything one frame shows. */
 export interface Scene {
   readonly circuit?: Circuit;
@@ -25,6 +28,8 @@ export interface Scene {
   readonly preview?: Preview;
   /** Hole under the pointer, outlined. */
   readonly hover?: BoardTerminal | null;
+  /** Wire ids on the logic analyzer, in channel order: tagged. */
+  readonly probes?: readonly string[];
   /** Part id the inspector is showing: outlined. */
   readonly selected?: string | null;
   /** Free-floating wire end (pixels) while dragging off any hole. */
@@ -152,6 +157,7 @@ export class BoardRenderer {
           ...(state.lit === undefined ? {} : { lit: state.lit }),
           ...(state.brightness === undefined ? {} : { brightness: state.brightness }),
           ...(state.burnt === undefined ? {} : { burnt: state.burnt }),
+          ...(state.segments === undefined ? {} : { segments: state.segments }),
           ...(state.position === undefined ? {} : { position: state.position }),
         });
       }
@@ -162,9 +168,33 @@ export class BoardRenderer {
       }
       for (const supply of circuit.supplies) drawSupply(ctx, spec, layout, supply);
 
-      const sel = scene.selected ? circuit.parts.find((p) => p.id === scene.selected) : undefined;
-      if (sel) {
-        const pts = Object.values(sel.pins).map((t) => layout.toPixel(terminalPosition(spec, t)));
+      // Probed wires: a numbered tag at the middle of each, in its analyzer channel colour.
+      (scene.probes ?? []).forEach((id, i) => {
+        const w = circuit.wires.find((x) => x.id === id);
+        if (!w) return;
+        const a = layout.toPixel(terminalPosition(spec, w.from));
+        const b = layout.toPixel(terminalPosition(spec, w.to));
+        const m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        ctx.fillStyle = PROBE_COLORS[i % PROBE_COLORS.length]!;
+        ctx.beginPath();
+        ctx.arc(m.x, m.y, px * 0.42, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#111';
+        ctx.font = `bold ${Math.round(px * 0.5)}px ui-monospace, monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(i + 1), m.x, m.y + 0.5);
+      });
+
+      const selPart = scene.selected
+        ? circuit.parts.find((p) => p.id === scene.selected)
+        : undefined;
+      const selLead = scene.selected
+        ? circuit.supplies.find((x) => x.id === scene.selected)
+        : undefined;
+      const selTerminals = selPart ? Object.values(selPart.pins) : selLead ? [selLead.at] : [];
+      if (selTerminals.length > 0) {
+        const pts = selTerminals.map((t) => layout.toPixel(terminalPosition(spec, t)));
         const xs = pts.map((p) => p.x);
         const ys = pts.map((p) => p.y);
         const pad = px * 0.75;
