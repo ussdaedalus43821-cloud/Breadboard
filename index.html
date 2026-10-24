@@ -60,6 +60,71 @@
         color: #9aa0a6;
         min-height: 1.2em;
       }
+      #scripting-toggle {
+        margin-top: 12px;
+      }
+      #scripting-toggle,
+      #scripting button,
+      #scripting select,
+      #scripting input {
+        font: inherit;
+        padding: 4px 10px;
+        border: 1px solid #4a4d55;
+        border-radius: 6px;
+        background: #383a40;
+        color: inherit;
+      }
+      #scripting {
+        margin-top: 8px;
+        max-width: 900px;
+      }
+      .script-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 6px;
+      }
+      #script-timeout {
+        width: 7ch;
+      }
+      #script-source,
+      #script-output {
+        box-sizing: border-box;
+        width: 100%;
+        font:
+          13px/1.45 ui-monospace,
+          monospace;
+        background: #1e1f22;
+        color: #e8e8e8;
+        border: 1px solid #4a4d55;
+        border-radius: 6px;
+        padding: 8px;
+      }
+      #script-source {
+        height: 260px;
+        resize: vertical;
+      }
+      #script-output {
+        min-height: 60px;
+        max-height: 220px;
+        overflow: auto;
+        white-space: pre-wrap;
+      }
+      #script-output .stderr {
+        color: #ff8787;
+      }
+      #script-status {
+        margin: 6px 0;
+        font-family: ui-monospace, monospace;
+        color: #9aa0a6;
+      }
+      #script-status[data-tone='ok'] {
+        color: #8ce99a;
+      }
+      #script-status[data-tone='error'] {
+        color: #ff8787;
+      }
       #warnings {
         margin: 8px 0 0;
         padding-left: 20px;
@@ -117,6 +182,29 @@
         <button type="button" id="clear-board">Clear board</button>
       </div>
       <canvas id="board"></canvas>
+      <button
+        type="button"
+        id="scripting-toggle"
+        aria-expanded="false"
+        aria-controls="scripting"
+        disabled
+      >
+        Scripting (NovaLang)
+      </button>
+      <section id="scripting" hidden aria-label="NovaLang scripting">
+        <div class="script-bar">
+          <label
+            >Example
+            <select id="script-example"></select
+          ></label>
+          <button type="button" id="script-run">Run script</button>
+          <button type="button" id="script-stop" disabled>Stop</button>
+          <label>Timeout <input id="script-timeout" type="number" min="100" step="100" /> ms</label>
+        </div>
+        <textarea id="script-source" spellcheck="false" aria-label="Script source"></textarea>
+        <div id="script-status" role="status"></div>
+        <div id="script-output" aria-label="Script output"></div>
+      </section>
       <div id="status"></div>
       <div id="hover"></div>
       <ul id="warnings" aria-label="Warnings"></ul>

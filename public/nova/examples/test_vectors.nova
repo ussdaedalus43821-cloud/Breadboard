@@ -1,0 +1,45 @@
+# test_vectors.nova - drive the half adder from half_adder.nova through all
+# four input states and check both LEDs. Prints PASS, or FAIL with details.
+#
+# Expects SW1 = A, SW2 = B, D1 = sum, D2 = carry (what half_adder.nova builds).
+
+let vectors = [
+    {a: 0, b: 0, sum: false, carry: false},
+    {a: 0, b: 1, sum: true, carry: false},
+    {a: 1, b: 0, sum: true, carry: false},
+    {a: 1, b: 1, sum: false, carry: true}
+]
+
+let ready = true
+try {
+    sim.get("SW1")
+    sim.get("SW2")
+    sim.get("D1")
+    sim.get("D2")
+} catch e {
+    ready = false
+    print("FAIL: no half adder on the board - run half_adder.nova first")
+}
+
+if ready {
+    let failures = 0
+    for v in vectors {
+        board.set("SW1", v.a)
+        board.set("SW2", v.b)
+        board.run(10)                     # let the gates settle (3 ticks is enough)
+        let sum_lit = sim.get("D1")["state"]["lit"]
+        let carry_lit = sim.get("D2")["state"]["lit"]
+        let warnings = len(sim.snapshot()["warnings"])
+        let verdict = "ok"
+        if sum_lit != v.sum or carry_lit != v.carry or warnings > 0 {
+            verdict = f"MISMATCH (expected sum={v.sum} carry={v.carry}, {warnings} warnings)"
+            failures = failures + 1
+        }
+        print(f"A={v.a} B={v.b} -> sum={sum_lit} carry={carry_lit}  {verdict}")
+    }
+    if failures == 0 {
+        print("PASS")
+    } else {
+        print(f"FAIL: {failures} of {len(vectors)} vectors wrong")
+    }
+}

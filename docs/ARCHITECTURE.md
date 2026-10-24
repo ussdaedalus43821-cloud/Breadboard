@@ -44,17 +44,25 @@ src/
     demos/           demo circuits as command lists (half-adder.ts)
   protocol/        JSON message types between main thread and workers:
                      sim-protocol.ts (requests, responses, circuit/frame pushes),
-                     circuit-host.ts (the UI's one door into the Circuit)
+                     circuit-host.ts (the UI's one door into the Circuit),
+                     bridge.ts (the NovaLang bridge wire format and caps),
+                     sync-buffer.ts (the shared response slot),
+                     nova-protocol.ts (main thread ↔ nova worker)
   worker/          sim-service.ts (owns the Circuit, answers requests, solves),
-                     sim.worker.ts (entry point: serves SimService on the worker
-                     global); nova.worker.ts (Phase 4.5)
+                     bridge.ts (the bridge dispatcher: ops → SimService),
+                     bridge-server.ts (answers the nova worker through the
+                     shared slot), sim.worker.ts (entry point)
+  nova/            the nova worker: worker.ts (Pyodide, global stripping,
+                     the blocking transport), runtime.ts (loads NovaLang +
+                     host.py into a Pyodide; shared with the tests),
+                     host.py (the board/sim globals and the script runner)
   ui/              everything that touches the DOM or a canvas
     canvas/          board-renderer.ts, board-layout.ts, part-shapes.ts
     editor/          editor.ts: palette tool, click-to-place, drag-to-wire,
                      click-to-toggle switches (no DOM)
     worker-circuit-host.ts  CircuitHost over the sim-worker protocol
-    panels/          inspector, scripting panel (later phases); the Phase 1
-                     palette is plain HTML in index.html
+    nova-client.ts   lazy nova worker start, bridge hookup, the watchdog
+    panels/          scripting-panel.ts; the palette is plain HTML in index.html
   main.ts          entry point: wires the UI to the workers
 ```
 
@@ -64,6 +72,7 @@ Dependency direction (an arrow means "may import"):
 ui ──► protocol ──► domain
  │                    ▲
  └────────────────────┘        worker ──► protocol, domain
+                               nova   ──► protocol
 ```
 
 Rules:
@@ -111,9 +120,12 @@ Rules:
 - **The NovaLang worker talks only to the sim worker**, over a
   `MessageChannel` port the main thread hands to both workers at
   start-up. The traffic is the JSON command/query bridge in
-  `NOVALANG_BRIDGE.md`: 10 commands and 3 queries. NovaLang never sees the
+  `NOVALANG_BRIDGE.md`: 11 commands and 3 queries. NovaLang never sees the
   solver, the tick loop, the netlist object or the renderer. It sees
-  JSON.
+  JSON. `src/nova/` may import only `protocol/` (ESLint), and the sim side
+  turns each bridge op into the same `SimService` requests the UI sends,
+  so there is one validation path. Pushes caused by a script go to the
+  UI, so the board visibly builds while a script runs.
 - **Synchronous calls from NovaLang.** NovaLang code is synchronous
   (`board.run(100)` then `sim.get("hole:e15")` must see the result). The
   nova worker posts the request on the port and then blocks in
@@ -125,7 +137,12 @@ Rules:
   panel is disabled with an explanation, and the rest of the game still
   works.
 - **Lazy load.** Pyodide and the vendored NovaLang files are fetched the
-  first time the scripting panel opens, never at start-up.
+  first time the scripting panel opens, never at start-up. Pyodide comes
+  from the `pyodide` npm package: a small Vite plugin serves it at
+  `/pyodide/` in dev and copies it into the build, so it is same-origin,
+  versioned by `package-lock.json`, and never loaded from a CDN.
+- **Isolation** of scripts is its own document:
+  [`NOVALANG_ISOLATION.md`](NOVALANG_ISOLATION.md).
 
 ## 4. TerminalRef discipline
 
@@ -380,10 +397,15 @@ One phase per session. Each ends with green tests, a demo script in
 
 - Source: the NovaLang repo, v1.1.0. It is treated as a third-party
   library and **not modified**.
-- Vendored (Phase 4.5) into `public/nova/`: `novalang.py`, `bootstrap.py`,
-  `novalang.nova`, `lib/`, plus `public/nova/VERSION` recording the source
-  repo and commit. Updating NovaLang means re-copying the files and bumping
-  `VERSION` in one commit.
-- Breadboard's own Python glue (the board/sim proxies and the host
-  runner) lives in Breadboard under `src/nova/` and is never mixed into
+- Vendored (Phase 4.5) into `public/nova/`: `novalang.py`, `bootstrap.py`
+  and `novalang.nova`, plus `public/nova/VERSION` recording the source repo,
+  commit and each file's SHA-256. A test checks the hashes, so the copies
+  cannot drift unnoticed. Only `novalang.py` is loaded at run time. The
+  others are kept for parity with upstream. `lib/` (ECS, spatial hash) is
+  not vendored: nothing here uses it (D-030).
+- Updating NovaLang means re-copying the files and updating `VERSION` in
+  one commit, then running the isolation tests. They pin the behaviours
+  Breadboard depends on and the ones it works around (D-032).
+- Breadboard's own Python glue (`src/nova/host.py`) is never mixed into
   the vendored files.
+- Example scripts live in `public/nova/examples/`.

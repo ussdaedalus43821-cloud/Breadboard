@@ -3,6 +3,8 @@ import { Editor, type Tool } from './ui/editor/editor';
 import { WorkerCircuitHost } from './ui/worker-circuit-host';
 import { HALF_ADDER } from './domain/demos/half-adder';
 import type { PortLike } from './protocol/sim-protocol';
+import { NovaClient } from './ui/nova-client';
+import { mountScriptingPanel } from './ui/panels/scripting-panel';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#board')!;
 const status = document.querySelector<HTMLDivElement>('#status')!;
@@ -96,6 +98,32 @@ document.querySelector('#load-demo')!.addEventListener('click', async () => {
   palette.querySelector<HTMLButtonElement>('[data-tool="select"]')!.click();
   editor.say(`${HALF_ADDER.title}: click SW1 (A) and SW2 (B). D1 = sum, D2 = carry.`);
 });
+
+// NovaLang scripting: the nova worker starts the first time the panel opens.
+const base = import.meta.env.BASE_URL;
+const nova = new NovaClient(
+  () => new Worker(new URL('./nova/worker.ts', import.meta.url), { type: 'module' }),
+  (port, message) => worker.postMessage(message, [port]),
+  base,
+);
+const $ = <T extends HTMLElement>(sel: string): T => document.querySelector<T>(sel)!;
+mountScriptingPanel(
+  {
+    toggle: $('#scripting-toggle'),
+    panel: $('#scripting'),
+    example: $('#script-example'),
+    source: $('#script-source'),
+    run: $('#script-run'),
+    stop: $('#script-stop'),
+    timeout: $('#script-timeout'),
+    status: $('#script-status'),
+    output: $('#script-output'),
+  },
+  nova,
+  host,
+  () => editor.frame?.running ?? true,
+  base,
+);
 
 const hit = (e: PointerEvent | MouseEvent) => renderer!.hitTest(e.clientX, e.clientY);
 const pitchPoint = (e: PointerEvent | MouseEvent) =>

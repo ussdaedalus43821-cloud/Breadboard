@@ -18,7 +18,7 @@ Not to be re-litigated.
 30 rows, 400 tie points. `boardSpec('full')` gives 63 rows, 830 tie points,
 with a `splitRails` option. Nothing outside `spec.ts` assumes a row count.
 
-## D-003 — Vendor NovaLang into `public/nova/` (Accepted, Phase 0; done in Phase 4.5)
+## D-003 — Vendor NovaLang into `public/nova/` (Accepted, Phase 0; refined by D-030)
 
 `novalang.py`, `bootstrap.py`, `novalang.nova`, `lib/` plus a `VERSION`
 file naming the source commit, so the game is self-contained. The NovaLang
@@ -262,3 +262,73 @@ real colour code, computed from `props.ohms`, and labelled with its value.
 An editable value belongs to the Phase 5 inspector. When it arrives it can
 become part `state` without changing the solver, which already reads
 `props.ohms` per part.
+
+## D-030 — Vendored files: the three the brief named, hashed (Accepted, Phase 4.5)
+
+`novalang.py`, `bootstrap.py` and `novalang.nova` are copied unmodified from
+the NovaLang repo at commit `02eabdb` (v1.1.0). `public/nova/VERSION`
+records the commit and each file's SHA-256, and a test checks them. `lib/`,
+which D-003 also listed, is left out because nothing in Breadboard imports
+it. Only `novalang.py` runs. The NovaLang `Nova` class is the embedding
+API; the self-hosted interpreter is not needed.
+
+## D-031 — Bridge contract v2 adds `board.resistor` (Accepted, Phase 4.5)
+
+The Phase 4.5 brief said to implement the bridge exactly as written (10
+commands). But the written contract had no resistor, and Phase 4's
+electrical model burns out an LED driven without one: a 74HC output into
+a bare LED is about 46 mA. A v1 script therefore could not build the
+half adder the acceptance criteria asked for. The contract itself named
+`board.resistor` as "the expected first edit", so it was added as command
+11 with a version bump to v2. Values are 100, 330, 1 000 or 10 000 Ω.
+Every v1 call is unchanged, and v1 requests are still accepted (minus
+`board.resistor`). **Flagged to the project owner.** To stay at 10
+commands, drop `board.resistor` and give `board.led` a built-in series
+resistor instead. In the same spirit, `board.led` and `board.resistor`
+accept `pin:` refs the way `board.wire` does (D-011), and leads aimed at
+one strip get distinct holes. `board.chip` takes `"7400"` or `"74HC00"`
+(every chip is the 74HC part).
+
+## D-032 — Scripts get no Python objects and no `python.*` (Accepted, Phase 4.5)
+
+Tested under Pyodide, NovaLang's embedding bridge is not the narrow bridge
+its README describes:
+
+- `expose_global(name, obj)` resolves any attribute on a lookup,
+  underscores and dunders included (only listing keys hides them), and can
+  set any attribute.
+- `python.get("json.__builtins__")` returns `builtins`, and allowlisted
+  modules re-export others (`statistics.sys`). That leads to
+  `sys.modules`, then Pyodide's `js`, then arbitrary JavaScript in the
+  worker.
+
+Breadboard therefore binds `board` and `sim` as **dicts of functions**.
+NovaLang calls them but cannot index them or read their attributes, and
+the dicts are copied in. It also deletes the `python` global from every
+engine (imported modules never had it). This costs scripts nothing they
+need: NovaLang has its own math, random and JSON built-ins. The NovaLang
+files stay unmodified (the brief's rule), and these findings belong
+upstream. `tests/acceptance/phase45-isolation.test.ts` pins every escape
+attempt, so a NovaLang update that changes the picture shows up as a test
+change.
+
+## D-033 — Pyodide via npm, served same-origin by a Vite plugin (Accepted, Phase 4.5)
+
+`pyodide` (314.0.7, Python 3.14) is a dev dependency. `vite.config.ts`
+serves its five runtime files at `/pyodide/` in dev and emits them into
+`dist/pyodide/` (about 13.5 MB, 3.6 MB of it gzipped wasm). The nova
+worker loads it with a dynamic `import()` of `/pyodide/pyodide.mjs`, so
+Vite never bundles it. Same-origin loading keeps the COEP `require-corp`
+headers simple and the version pinned. Tests load the same package in
+Node.
+
+## D-034 — How the bridge is tested (Accepted, Phase 4.5)
+
+Vitest runs the real vendored NovaLang under the real Pyodide in Node, with
+the real `host.py`, bridge dispatcher and `SimService`. The only
+difference from the browser is the transport: a direct function call
+instead of the two-worker `SharedArrayBuffer` hop. The response-buffer
+helpers are unit-tested, and the full hop (plus `fetch` stripping, hard
+kill, Stop, and loading nothing from off-site) is verified in Chromium.
+The watchdog's soft stop is tested in Node by a worker thread that writes
+SIGINT into the interrupt buffer while NovaLang spins on the main thread.

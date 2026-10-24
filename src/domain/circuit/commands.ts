@@ -150,8 +150,13 @@ function dispatch(circuit: Circuit, cmd: Command): CommandResult {
           `${def.label} needs pins ${wanted.join(', ')}, got ${given.join(', ') || 'none'}`,
         );
       }
+      // As with wires, a `pin:` lead goes into the nearest free hole joined to that pin.
+      const holes = leadHoles(
+        circuit,
+        def.pins.map((p) => [cmd.pins[p.pin], boardTerminal(circuit, cmd.pins[p.pin])] as const),
+      );
       const pins: Record<string, BoardTerminal> = {};
-      for (const p of def.pins) pins[p.pin] = boardTerminal(circuit, cmd.pins[p.pin]);
+      def.pins.forEach((p, i) => (pins[p.pin] = holes[i]!));
       return addPart(circuit, def.type, pins);
     }
     case 'wire': {
@@ -164,10 +169,10 @@ function dispatch(circuit: Circuit, cmd: Command): CommandResult {
         );
       }
       // A pin end goes into the nearest free hole joined to that pin's hole.
-      const ends = [cmd.from, cmd.to].map((key, i) => {
-        const end = i === 0 ? from : to;
-        return key.startsWith('pin:') ? freeHoleJoinedTo(circuit, end) : end;
-      }) as [BoardTerminal, BoardTerminal];
+      const ends = leadHoles(circuit, [
+        [cmd.from, from],
+        [cmd.to, to],
+      ]) as [BoardTerminal, BoardTerminal];
       assertFree(circuit, ends);
       const { id, nextId } = allocateId(circuit, 'W');
       const wire = { id, from: ends[0], to: ends[1] };
@@ -242,7 +247,11 @@ function dispatch(circuit: Circuit, cmd: Command): CommandResult {
  * to it (its row strip or rail line), for wiring "to a pin": the pin's own
  * hole is taken by the pin, and one lead per hole is the rule.
  */
-function freeHoleJoinedTo(circuit: Circuit, t: BoardTerminal): BoardTerminal {
+function freeHoleJoinedTo(
+  circuit: Circuit,
+  t: BoardTerminal,
+  claimed: ReadonlySet<TerminalKey> = new Set(),
+): BoardTerminal {
   const key = terminalKey(t);
   const group = boardConnections(circuit.spec).find((g) => g.some((m) => terminalKey(m) === key));
   const occupied = occupancy(circuit);
@@ -251,10 +260,31 @@ function freeHoleJoinedTo(circuit: Circuit, t: BoardTerminal): BoardTerminal {
     const p = terminalPosition(circuit.spec, m);
     return Math.hypot(p.x - at.x, p.y - at.y);
   };
-  const free = (group ?? []).filter((m) => !occupied.has(terminalKey(m)));
+  const free = (group ?? []).filter(
+    (m) => !occupied.has(terminalKey(m)) && !claimed.has(terminalKey(m)),
+  );
   free.sort((a, b) => dist(a) - dist(b));
   if (!free[0]) throw new Rejection('OCCUPIED', `no free hole left joined to ${key}`);
   return free[0];
+}
+
+/**
+ * The holes a command's leads go into: a hole or rail key as given, a `pin:`
+ * key as the nearest free hole joined to that pin (D-011). Holes picked for
+ * earlier leads of the same command are not reused, so two leads aimed at one
+ * strip land in two holes.
+ */
+function leadHoles(
+  circuit: Circuit,
+  leads: ReadonlyArray<readonly [unknown, BoardTerminal]>,
+): BoardTerminal[] {
+  const claimed = new Set<TerminalKey>();
+  return leads.map(([key, t]) => {
+    const hole =
+      typeof key === 'string' && key.startsWith('pin:') ? freeHoleJoinedTo(circuit, t, claimed) : t;
+    claimed.add(terminalKey(hole));
+    return hole;
+  });
 }
 
 export function applyCommand(circuit: Circuit, cmd: Command): CommandResult {

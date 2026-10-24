@@ -41,6 +41,17 @@ export default tseslint.config(
                 'src/protocol/** may only import from src/domain/** (docs/ARCHITECTURE.md §2).',
             },
             {
+              target: './src/nova',
+              from: ['./src/domain', './src/ui', './src/worker'],
+              message:
+                'src/nova/** (the NovaLang worker) may only import src/protocol/**: scripts reach the sim through the bridge alone (docs/NOVALANG_ISOLATION.md).',
+            },
+            {
+              target: './src/ui',
+              from: './src/nova',
+              message: 'src/ui/** talks to the nova worker only through protocol/ messages.',
+            },
+            {
               target: './src/worker',
               from: './src/ui',
               message: 'src/worker/** must not import src/ui/** (docs/ARCHITECTURE.md §2).',

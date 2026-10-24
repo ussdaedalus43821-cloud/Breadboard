@@ -1,0 +1,53 @@
+# half_adder.nova - build a half adder from scratch on one 74HC00.
+#
+#   sum   = A XOR B = NAND(NAND(A, n1), NAND(B, n1)),  n1 = NAND(A, B)
+#   carry = A AND B = NOT n1
+#
+# Four NANDs make the XOR. The carry LED sinks into n1: +5 V -> 330 ohm ->
+# D2 -> n1, so it lights exactly when n1 is low, i.e. when A = B = 1.
+# Run test_vectors.nova afterwards to check all four input states.
+
+board.new("half")
+board.power("rail:top+:1")
+board.ground("rail:top-:1")
+board.power("rail:bottom+:1")
+board.ground("rail:bottom-:1")
+
+# Inputs: SPDT switches. Position 0 joins com to a (ground), 1 joins com to b (+5 V).
+let sw_a = board.switch("hole:a3")        # a3 = a, a4 = com, a5 = b
+board.wire("hole:b3", "rail:bottom-:3")
+board.wire("hole:b5", "rail:bottom+:5")
+let sw_b = board.switch("hole:a8")        # a8 = a, a9 = com, a10 = b
+board.wire("hole:b8", "rail:bottom-:8")
+board.wire("hole:b10", "rail:bottom+:10")
+let A = sw_a["pins"]["com"]
+let B = sw_b["pins"]["com"]
+
+# The chip, straddling the channel with pin 1 at e16, and its supply.
+let u1 = board.chip("7400", "hole:e16")
+let p = u1["pins"]
+board.wire(p["14"], "rail:top+:15")
+board.wire(p["7"], "rail:bottom-:19")
+
+# XOR from four NANDs. Wiring "to a pin" lands in a free hole of that pin's strip.
+board.wire(A, p["1"])          # 1A
+board.wire(B, p["2"])          # 1B          -> n1 on pin 3
+board.wire(A, p["4"])          # 2A
+board.wire(p["3"], p["5"])     # 2B = n1     -> n2 on pin 6
+board.wire(B, p["9"])          # 3A
+board.wire(p["3"], p["10"])    # 3B = n1     -> n3 on pin 8
+board.wire(p["6"], p["12"])    # 4A = n2
+board.wire(p["8"], p["13"])    # 4B = n3     -> sum on pin 11
+
+# Sum: 4Y sources current through 330 ohm into D1, then to ground.
+let d_sum = board.led("hole:i24", "hole:i25")
+board.resistor(330, p["11"], d_sum["pins"]["anode"])
+board.wire(d_sum["pins"]["cathode"], "rail:top-:21")
+
+# Carry: +5 V -> 330 ohm -> D2 -> n1.
+let d_carry = board.led("hole:b26", "hole:b27")
+board.resistor(330, "rail:bottom+:22", d_carry["pins"]["anode"])
+board.wire(d_carry["pins"]["cathode"], p["3"])
+
+board.run(10)
+print(f"half adder built: {sw_a["id"]} = A, {sw_b["id"]} = B, {d_sum["id"]} = sum, {d_carry["id"]} = carry")

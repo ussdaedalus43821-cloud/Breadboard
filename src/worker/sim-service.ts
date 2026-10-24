@@ -29,6 +29,15 @@ export class SimService {
   private owedMs = 0;
   private sinceTimePush = 0;
 
+  /** Read-only view for queries (the bridge's sim.* calls). */
+  get state(): {
+    readonly circuit: Circuit;
+    readonly result: Simulation['result'];
+    readonly time: Simulation['time'];
+  } {
+    return { circuit: this.circuit, result: this.sim.result, time: this.sim.time };
+  }
+
   /** Handle one request; returns the messages to send, pushes first. */
   handle(raw: unknown): SimMessage[] {
     const req = raw as Partial<SimRequest> | null;

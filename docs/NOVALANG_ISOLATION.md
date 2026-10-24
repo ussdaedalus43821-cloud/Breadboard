@@ -1,89 +1,109 @@
 # NovaLang Isolation
 
 What a NovaLang script running inside Breadboard **cannot** do, and which
-layer makes each guarantee true. This follows NovaLang's own _Security_
-section: `python.*` is "a deliberate, narrow bridge, not unrestricted
-access to the host process". Breadboard keeps that bridge exactly as
-narrow and adds browser-level walls around it.
+layer makes each guarantee true. A script may be something the user wrote,
+pasted from a forum, or loaded from a shared URL. Treat every script as
+untrusted.
 
-A script may be something the user wrote, pasted from a forum, or loaded
-from a shared URL. Treat every script as untrusted.
+The Phase 0 draft of this file relied on NovaLang's own _Security_ section
+(`python.*` as "a deliberate, narrow bridge") and on its live object proxy
+hiding underscore names. Phase 4.5 tested both under Pyodide and neither
+holds up (D-032):
+
+- **Object proxies leak internals.** `expose_global(name, obj)` resolves
+  any attribute on a lookup, underscores and dunders included (only listing
+  keys hides them), and can set any attribute.
+- **`python.*` reaches dunders.** `python.get("json.__builtins__")` returns
+  Python's `builtins`, `__import__` included. Allowlisted modules re-export
+  others (`statistics.sys`), which leads to `sys.modules` and from there to
+  Pyodide's `js` module, which runs arbitrary JavaScript in the worker.
+
+So Breadboard does not depend on either. The walls below are Breadboard's
+own, in `src/nova/host.py` and `src/nova/worker.ts`. The vendored NovaLang
+files are unmodified, and the issues above are NovaLang's to fix upstream.
 
 ## 1. What a script can do
 
-- Run NovaLang: its language, its standard library, and the
-  pure-computation modules on NovaLang's own `python.import` allowlist
-  (`math`, `random`, `statistics`, `itertools`, `functools`, `string`,
-  `re`, `datetime`, `json`, `collections`).
-- Call the 10 `board.*` commands and 3 `sim.*` queries in
+- Run NovaLang: the language and its built-in functions (`print`, `len`,
+  `range`, `str`, `sqrt`, `random`, `json.dumps`/`loads`, …).
+- Call the 11 `board.*` commands and 3 `sim.*` queries in
   [`NOVALANG_BRIDGE.md`](NOVALANG_BRIDGE.md), with JSON values in and out.
-- `print`, which goes to the scripting panel's console.
+- Read and write files in a throwaway in-memory filesystem (§2).
+- `print`, which goes to the scripting panel's output.
 
-That is the whole list.
+That is the whole list. In particular, **there is no `python.*`**.
 
 ## 2. What a script cannot do
 
-| A script cannot…                                                                                                      | Why it can't                                                                                                                                                                                                                                                                                                                                                         |
-| --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Touch `window`, `document`, the DOM, `localStorage`, `sessionStorage`, cookies                                        | It runs in a dedicated Web Worker, which has no `window`, DOM or Web Storage. The main thread never evaluates script-provided strings.                                                                                                                                                                                                                               |
-| Use `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `importScripts`, `indexedDB`, `caches`, `BroadcastChannel` | The nova worker deletes or overrides these globals after Pyodide and the vendored NovaLang files have loaded, and **before** any user script runs. Pyodide's package loader is disabled at the same point (`loadPackage`/`micropip` are unavailable).                                                                                                                |
-| `python.import("os")`, `"sys"`, `"subprocess"`, `"js"`, `"pyodide"`, …                                                | NovaLang's own `PYTHON_IMPORT_ALLOWLIST` refuses them with `PythonError`. Breadboard never calls `Nova.expose_module`, so the allowlist is never widened. `js` and `pyodide`, the two modules that would reach the worker's JavaScript, are specifically never exposed.                                                                                              |
-| Reach Python objects beyond `board` and `sim`                                                                         | Only those two are bound, with `expose_global`. NovaLang's live proxy exposes only `dir()`-visible, non-underscore attributes, so the proxy classes keep **every** internal (port, buffers, counters) underscore-prefixed. Their public surface is exactly the 13 bridge calls. Every return value is a fresh plain `dict`/`list`/`str`/number, never a live object. |
-| Read or write the user's files                                                                                        | NovaLang's `read`/`write`/`exists` reach only Pyodide's in-memory Emscripten filesystem: a scratch directory that starts empty, is never synced to IndexedDB, and is discarded when the worker restarts. `input()` raises.                                                                                                                                           |
-| Touch the solver, tick loop, netlist, circuit object or renderer                                                      | Those live in the **sim worker**, a different thread with a different heap. The only path in is the JSON bridge, and the sim worker validates every request (`op` on the fixed list, `args` type-checked, TerminalRefs parsed and bounds-checked) before acting. There is no `eval` op.                                                                              |
-| Hang the sim                                                                                                          | Every bridge command does bounded work (`board.run` ≤ 10 000 ms of sim time, `board.step` ≤ 100 000 ticks, part and wire caps; see `NOVALANG_BRIDGE.md` §6). The sim worker stays responsive to the UI between bridge calls, and the UI keeps rendering while a script runs.                                                                                         |
-| Hang the page, or itself forever                                                                                      | The **watchdog** (§3).                                                                                                                                                                                                                                                                                                                                               |
-| Survive its own crash with state                                                                                      | Each run starts from a fresh `Nova()` instance. Nothing a script defines carries over to the next run. The only persistent effect of a script is the circuit it built through `board.*`.                                                                                                                                                                             |
+| A script cannot…                                                                                                      | Why it can't                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Use `python.import`, `python.get`, `python.call` or `python.set`                                                      | `host.py` deletes the `python` global from every engine it creates. Modules a script `import`s start from NovaLang's fresh, empty globals, so they never see it either.                                                                                                                                                                                                                                                                   |
+| Reach any Python object                                                                                               | `board` and `sim` are **plain dicts of functions**, not objects. NovaLang can call a function but never index it or read its attributes ("a function cannot be indexed"), and a dict is copied into the script. So `board["_bridge"]`, `board["__class__"]` and `board.new.__globals__` all fail. Every return value is fresh JSON data (dicts, lists, strings, numbers, booleans). Overwriting `board.new` changes only that run's copy. |
+| Touch `window`, `document`, the DOM, `localStorage`, `sessionStorage`, cookies                                        | It runs in a dedicated Web Worker, which has none of them. The main thread never evaluates script text and shows worker output only as text.                                                                                                                                                                                                                                                                                              |
+| Use `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `importScripts`, `indexedDB`, `caches`, `BroadcastChannel` | The nova worker removes these globals after Pyodide and NovaLang have loaded and **before** any script runs, and reports the result (`typeof fetch` is `"undefined"`; the panel's status tooltip lists it). Pyodide's `loadPackage` is replaced with a function that throws.                                                                                                                                                              |
+| Read the user's or the server's files                                                                                 | NovaLang's `read`/`write`/`listdir`/… reach only Pyodide's in-memory Emscripten filesystem. It is never synced anywhere and is discarded with the worker. `input()` sees end-of-input and raises NovaLang's catchable "found no more input".                                                                                                                                                                                              |
+| Touch the solver, tick loop, netlist, circuit or renderer                                                             | Those live in the **sim worker**, a different thread and heap. The only way in is the JSON bridge. The sim worker checks every request (op on the fixed list, argument count and types, TerminalRefs parsed and bounds-checked) and refuses anything else with `BAD_ARGS`. There is no `eval` or raw op.                                                                                                                                  |
+| Hang the sim                                                                                                          | Every bridge call does bounded work (`board.run` ≤ 10 000 ms of sim time, `board.step` ≤ 100 000 ticks, 200 parts, 1 000 wires, 100 000 calls per run; `NOVALANG_BRIDGE.md` §6). The sim worker never waits on the nova worker, and the UI keeps rendering while a script runs.                                                                                                                                                           |
+| Crash Pyodide by recursing                                                                                            | NovaLang raises Python's recursion limit to 20 000 on import, past what Pyodide's WebAssembly stack holds. `host.py` restores Pyodide's own limit (1 000), so runaway recursion is a caught `RecursionError`. If Pyodide fails anyway, the worker reports `fatal` and the main thread replaces it.                                                                                                                                        |
+| Hang the page, or itself forever                                                                                      | The **watchdog** (§3).                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Carry state between runs                                                                                              | Each run gets a fresh `Nova()` engine and fresh `board`/`sim` dicts. The only lasting effect of a script is the circuit it built.                                                                                                                                                                                                                                                                                                         |
 
 ## 3. Watchdog
 
-NovaLang's embedding API has no step limit or timeout, so the limit is
-enforced from outside the nova worker:
+NovaLang's embedding API has no step limit or timeout, so the main thread
+(`src/ui/nova-client.ts`) enforces one from outside:
 
-1. **Soft stop at `N` ms** (default `N = 5000` wall-clock ms per run;
-   configurable in the panel, max 60 000). The main thread writes `SIGINT`
-   (2) into Pyodide's interrupt buffer (`pyodide.setInterruptBuffer`, a
-   `SharedArrayBuffer`). Python raises `KeyboardInterrupt` at its next
-   bytecode check, the host runner reports `TIMEOUT`, and the worker stays
-   warm.
-2. **Hard kill at `N + 1000` ms.** If the soft stop has not returned
-   control (for example, stuck in a long native call), the main thread
-   calls `worker.terminate()` on the nova worker. This is the only kill
-   that always works. The panel reports `TIMEOUT (killed)`. The next run
-   spawns a fresh worker, which reloads Pyodide from the browser cache.
+1. **Soft stop at `N` ms** (default 5 000, set in the panel, at most
+   60 000). The main thread writes SIGINT (2) into Pyodide's interrupt
+   buffer, a `SharedArrayBuffer`. Python raises `KeyboardInterrupt` at its
+   next check. NovaLang does not catch it on the embedding path, so
+   `host.py` reports `TIMEOUT: the script ran too long and was stopped`
+   and the worker stays warm.
+2. **Hard kill at `N` + 1 000 ms.** If the soft stop has not returned
+   control (for example, inside `sleep()`), the main thread calls
+   `worker.terminate()`. The panel shows `TIMEOUT (killed)`, and the next
+   run starts a fresh worker (about 1.5 s, with Pyodide from the browser
+   cache). **Stop** in the panel does the same kill at once.
 3. A killed script may have been blocked in `Atomics.wait` on a bridge
-   call. The sim worker never waits on the nova worker. It answers
-   requests and moves on, so killing the nova worker leaves the sim intact.
-   Any commands that already completed stay applied (the bridge is not
-   transactional, see `NOVALANG_BRIDGE.md` §4).
-4. The bridge-call cap (100 000 per run) catches runaway loops of cheap
-   calls before the wall-clock limit does.
+   call. The sim worker answers and moves on, so it is unaffected. Commands
+   that already completed stay applied (the bridge is not transactional).
+4. The script's clock is the sim's: the real-time 1 kHz clock is paused
+   while a script runs (D-023), and resumes afterwards if it was running.
 
 ## 4. Things that are deliberately _not_ isolation
 
-- **Determinism is not a security property.** `random` is allowed. Scripts
-  that want reproducibility seed it themselves.
-- **No rollback.** As in NovaLang, an error partway through leaves earlier
-  successful commands applied. The user can undo (Phase 5).
+- **Determinism is not a security property.** NovaLang's `random()` is
+  available.
+- **No rollback.** An error partway through leaves earlier successful
+  commands applied. Undo arrives in Phase 5.
 - **CPU use inside the time limit is allowed.** A script may burn its full
-  `N` ms. It runs on its own thread, so it only slows itself.
+  `N` ms on its own thread.
+- **Dynamic `import()` cannot be removed from a worker.** Reaching it needs
+  JavaScript execution, which needs a Python object, which §2 denies. As
+  defence in depth, production hosting should send a Content-Security-Policy
+  that limits `script-src`, `connect-src` and `worker-src` to `'self'` (plus
+  `'wasm-unsafe-eval'` for Pyodide).
 
 ## 5. Invariants to keep when changing code
 
-- Never call `Nova.expose_module`, and never bind anything but `board` and
-  `sim` as globals.
-- Never add a public (non-underscore) attribute to the Python proxy classes
-  that is not a bridge call listed in `NOVALANG_BRIDGE.md`.
-- Never add a bridge `op` that takes code, a path, a URL, or an arbitrary
-  key into sim internals.
+- Never bind a Python **object** into a script. `board`/`sim` stay dicts
+  of functions whose keys are exactly the bridge calls.
+- Never put `python` back, never call `Nova.expose`, `expose_module` or
+  `expose_global` with anything but those two dicts.
+- Never return anything from a bridge function but parsed JSON.
+- Never add a bridge `op` that takes code, a path, a URL or a key into sim
+  internals.
 - Strip the network/storage globals **after** loading and **before** the
-  first user script. A test asserts `typeof fetch === 'undefined'` inside
-  the worker at script time.
-- Never modify the vendored NovaLang files to tighten or loosen any of
-  this. Isolation lives in Breadboard's host code.
+  first script.
+- Never modify the vendored NovaLang files, to tighten or to loosen.
+  Isolation lives in Breadboard's host code.
 
-Each invariant gets a Vitest test in Phase 4.5
-(`tests/acceptance/phase45-isolation.test.ts`): `python.import("os")` is
-refused, `fetch` is undefined, a `while true {}` script is stopped and a
-second script then runs normally, an unknown `op` is `BAD_ARGS`, and the
-proxy's `dir()` equals the bridge list.
+Tests: `tests/acceptance/phase45-isolation.test.ts` covers the missing
+`python.*` (also through `import`), each escape attempt above, the
+recursion limit, the call cap, `input()`, the in-memory filesystem, the
+watchdog's soft stop (a Node worker thread plays the watchdog), the
+public surface (exactly the contract's calls), and the vendored files'
+hashes. `src/worker/bridge.test.ts` covers the dispatcher's refusals. The
+browser run (`docs/demos/phase-4.5.md`) checks `typeof fetch` in the
+worker, the hard kill and recovery, the Stop button, and that nothing is
+requested from outside the site.

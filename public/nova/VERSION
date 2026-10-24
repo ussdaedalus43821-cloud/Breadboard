@@ -1,0 +1,7 @@
+NovaLang v1.1.0 — vendored, unmodified (docs/DECISIONS.md D-003, D-030).
+source: ussdaedalus43821-cloud/nova_lang
+commit: 02eabdbdb19a1c4c31a1121ee7674c6f7015e701
+files: novalang.py bootstrap.py novalang.nova
+sha256: dd6462f6e2b36aa5eefc7a25c11a58f2d8ea3754b2e2c09b96f65c30ac943018  novalang.py
+sha256: fc7b35d200c91aec7d032483fa106013762240d1a76d95e1eee65d78d644cc87  bootstrap.py
+sha256: 527477769c6dad1077d3104934bdc983c4413827008d6279ad7c3b93b2e3b161  novalang.nova
