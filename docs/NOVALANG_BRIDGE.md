@@ -1,4 +1,4 @@
-# NovaLang Bridge — Contract v2
+# NovaLang Bridge — Contract v3
 
 This file **is** the contract between NovaLang scripts and Breadboard's sim
 worker. Any addition, removal or change of a command, argument, return shape
@@ -6,11 +6,12 @@ or error code requires a deliberate edit to this file (bump the contract
 version in §7) in the same commit as the code change.
 
 Implemented in Phase 4.5: the sim side is `src/worker/bridge.ts`, the script
-side `src/nova/host.py`. v2 added `board.resistor` (§7, D-031).
+side `src/nova/host.py`. v2 added `board.resistor` (D-031); v3 added
+`board.display` and `board.clock` (§7, D-045).
 
 ## 1. Shape
 
-- **11 commands** (change the board or advance time), all under `board.*`.
+- **13 commands** (change the board or advance time), all under `board.*`.
 - **3 queries** (read only), all under `sim.*`.
 - Every argument and every return value is **JSON-serializable**: strings,
   numbers, booleans, `null`, lists and dicts of those. Scripts never hold
@@ -51,8 +52,10 @@ after the sim worker has applied it.
 | 9   | `board.run(ms)`                  | Advance sim time by `ms` milliseconds (`0 < ms ≤ 10000`). 1 tick = 1 ms; a fractional `ms` rounds up to whole ticks.                                                                                                                                                                                                                                                                   | `sim.time()` result                        |
 | 10  | `board.step(ticks)`              | Advance exactly `ticks` sim ticks (an integer, `1 ≤ ticks ≤ 100000`).                                                                                                                                                                                                                                                                                                                  | `sim.time()` result                        |
 | 11  | `board.resistor(ohms, from, to)` | **v2.** Place a resistor between two holes or rail holes (`pin:` refs as for `board.led`). `ohms` is `100`, `330`, `1000` or `10000`. Pins: `1` (at `from`), `2` (at `to`).                                                                                                                                                                                                            | part handle                                |
+| 12  | `board.display(at)`              | **v3.** Place a common-cathode 7-segment display (5161AS pinout) with pin 1 at `at`: pins 1–5 run along that column, pins 6–10 sit six columns up (from `e`, that is column `i`). Pins 3 and 8 are the common cathode, joined inside. Segments: `a` 7, `b` 6, `c` 4, `d` 2, `e` 1, `f` 9, `g` 10, `dp` 5.                                                                              | part handle plus `"segments"`              |
+| 13  | `board.clock(at, hz=100)`        | **v3.** Attach a CLK lead to `at`: a 0/5 V square wave through 50 Ω, high for the first half of each period, starting high at time 0. `hz` must make the period an even whole number of 1 ms ticks from 2 to 10 000 (500 Hz down to 0.1 Hz: `1`, `2`, `5`, `10`, `100`, `250`, … are fine, `3` is not). The UI's inspector changes it later.                                           | `{ "id", "at", "hz", "periodTicks" }`      |
 
-Part **handle** (returned by `switch`, `led`, `chip`, `resistor`):
+Part **handle** (returned by `switch`, `led`, `chip`, `resistor`, `display`):
 
 ```json
 {
@@ -63,8 +66,13 @@ Part **handle** (returned by `switch`, `led`, `chip`, `resistor`):
 }
 ```
 
+`board.display` adds `"segments"`, each segment's pin key:
+`{ "a": "pin:DS1:7", "b": "pin:DS1:6", …, "dp": "pin:DS1:5" }`, so
+`board.resistor(330, "hole:b10", d["segments"]["g"])` wires segment g.
+
 Part ids are assigned by the sim worker (`U<n>` chips, `SW<n>` switches,
-`D<n>` LEDs, `R<n>` resistors, `W<n>` wires, `VCC<n>`/`GND<n>` supply leads)
+`D<n>` LEDs, `R<n>` resistors, `DS<n>` displays, `W<n>` wires,
+`VCC<n>`/`GND<n>`/`CLK<n>` supply leads)
 and are stable for the life of the board.
 
 Placement rules (shared with the UI, enforced by the dispatcher): every
@@ -85,7 +93,9 @@ drives the net; a floating chip input also raises a warning). `"X"` means
 contention or unknown (between the 74HC thresholds of 1.5 V and 3.5 V).
 `volts` is the net's node voltage, or `null` for a floating net. Part
 `state` also carries electrical readings: LEDs report `lit`,
-`brightness` (0…1), `milliamps` and `burnt`; resistors report `milliamps`.
+`brightness` (0…1), `milliamps` and `burnt`; resistors report `milliamps`;
+a display reports `segments`, one LED-style state per segment
+(`state["segments"]["g"]["lit"]`).
 
 ## 4. Errors
 
@@ -121,17 +131,19 @@ shared response slot (`src/protocol/sync-buffer.ts`):
 
 ```jsonc
 // request  (nova worker → sim worker)
-{ "v": 2, "id": 42, "op": "board.chip", "args": ["7400", "hole:e10"] }
+{ "v": 3, "id": 42, "op": "board.chip", "args": ["7400", "hole:e10"] }
 
 // response (sim worker → nova worker)
-{ "v": 2, "id": 42, "ok": true,  "result": { "id": "U1", "...": "..." } }
-{ "v": 2, "id": 42, "ok": false, "error": { "code": "OCCUPIED", "message": "hole:e10 already holds pin:U2:1" } }
+{ "v": 3, "id": 42, "ok": true,  "result": { "id": "U1", "...": "..." } }
+{ "v": 3, "id": 42, "ok": false, "error": { "code": "OCCUPIED", "message": "hole:e10 already holds pin:U2:1" } }
 ```
 
-- `op` is one of the 14 names above. Anything else is `BAD_ARGS`, and
+- `op` is one of the 16 names above. Anything else is `BAD_ARGS`, and
   there is no "eval" or "raw" op.
-- `v` is 1 or 2, and the response echoes it. A v1 request may use every op
-  except `board.resistor`.
+- `v` is 1, 2 or 3, and the response echoes it. An op newer than the
+  request's version is `BAD_ARGS` (`board.clock needs bridge contract v3`):
+  v1 may use every op except `board.resistor`, `board.display` and
+  `board.clock`; v2 every op except the last two.
 - `args` is always a positional JSON array.
 - Responses larger than the shared slot (1 MiB) fail with `LIMIT`.
 
@@ -152,15 +164,17 @@ every command does bounded work and returns.
 
 ## 7. Versioning
 
-- Contract version: **2**. It is the `v` field of every message.
+- Contract version: **3**. It is the `v` field of every message.
 - **v2 (Phase 4.5)** added `board.resistor`. Stage-2 electrical (Phase 4)
   burns out an LED driven without a series resistor, so v1 could not build
   a working LED circuit at all (D-031). Every v1 call is unchanged.
-- Still absent: part removal, rotation, other resistor values. Phase 6
-  added chips to `board.chip`'s accepted names (a value, not a new op, so
-  still v2), but no command yet places a 7-segment display or a clock lead.
-  Scripts get those from the UI or a loaded circuit. A `board.part` /
-  `board.clock` pair is the natural v3.
+- **v3 (Phase 7)** added `board.display` and `board.clock`, so a script can
+  build the Phase 6 counter circuits (a 7-segment display, a free-running
+  clock) without the UI (D-045). Phase 6 had already widened
+  `board.chip`'s accepted names (a value, not a new op). Every v1 and v2
+  call is unchanged, and `host.py` sends `v: 3`.
+- Still absent: part removal, rotation, other resistor values, changing a
+  clock's rate from a script.
 - Additions bump `v` and keep old ops working. Removals and changes need
   a migration note here.
 
@@ -174,6 +188,9 @@ every command does bounded work and returns.
 - `test_vectors.nova` drives that circuit through 00, 01, 10 and 11 with
   `board.set` and `board.run`, checks both LEDs with `sim.get`, and prints
   `PASS` or `FAIL` with details.
+- `clock_display.nova` (v3) puts a 2 Hz CLK lead on segment g of a
+  7-segment display and prints the segment's state every 250 ms:
+  `g lit: [true, false, true, false, …]`.
 
 A minimal script:
 

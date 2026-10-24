@@ -1,4 +1,5 @@
 import { BoardRenderer } from './ui/canvas/board-renderer';
+import { ZOOM_STEP, fitView, panBy, wheelFactor, zoomAt } from './ui/canvas/viewport';
 import { Editor, type Tool } from './ui/editor/editor';
 import { WorkerCircuitHost } from './ui/worker-circuit-host';
 import { DEMOS } from './domain/demos';
@@ -10,8 +11,11 @@ import { mountInspector } from './ui/panels/inspector';
 import { toSave } from './domain/circuit/save';
 import { decodeShareHash, encodeShareHash } from './ui/persistence/share';
 import { deleteSave, listSaves, readSave, writeSave } from './ui/persistence/storage';
+import { mountWelcome } from './ui/panels/welcome';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#board')!;
+const viewportEl = document.querySelector<HTMLDivElement>('#board-viewport')!;
+const zoomLabel = document.querySelector<HTMLSpanElement>('#zoom-level')!;
 const status = document.querySelector<HTMLDivElement>('#status')!;
 const hoverLine = document.querySelector<HTMLDivElement>('#hover')!;
 const warningList = document.querySelector<HTMLUListElement>('#warnings')!;
@@ -35,13 +39,29 @@ let renderAnalyzer: () => void = () => {};
 const undoButton = document.querySelector<HTMLButtonElement>('#undo')!;
 const redoButton = document.querySelector<HTMLButtonElement>('#redo')!;
 
-const editor = new Editor(host, () => {
+const viewportSize = () => ({ w: viewportEl.clientWidth, h: viewportEl.clientHeight });
+/** A renderer for the current board, fitted to the viewport. */
+function makeRenderer(): BoardRenderer {
+  const r = new BoardRenderer(canvas, editor.current.spec, viewportSize());
+  r.view = fitView(r.boardSize, r.viewportSize);
+  fitted = true;
+  return r;
+}
+/** True until the user zooms or pans: a fitted view refits when the window resizes. */
+let fitted = true;
+
+const editor = new Editor(host, requestDraw);
+function requestDraw(): void {
   if (frame) return;
   frame = requestAnimationFrame(() => {
     frame = 0;
     // A loaded save may use the other board size.
-    if (renderer && renderer.spec.size !== editor.current.spec.size) {
-      renderer = new BoardRenderer(canvas, editor.current.spec);
+    if (renderer && renderer.spec.size !== editor.current.spec.size) renderer = makeRenderer();
+    if (renderer) {
+      const zoom = Math.round(renderer.view.zoom * 100);
+      zoomLabel.textContent = `${zoom}%`;
+      canvas.dataset['zoom'] = renderer.view.zoom.toFixed(3);
+      canvas.dataset['view'] = `${renderer.view.x.toFixed(1)},${renderer.view.y.toFixed(1)}`;
     }
     renderer?.draw({
       circuit: editor.current,
@@ -79,8 +99,14 @@ const editor = new Editor(host, () => {
       );
     }
   });
-});
-renderer = new BoardRenderer(canvas, editor.current.spec);
+}
+renderer = makeRenderer();
+new ResizeObserver(() => {
+  if (!renderer) return;
+  renderer.resize(viewportSize());
+  if (fitted) renderer.view = fitView(renderer.boardSize, renderer.viewportSize);
+  requestDraw();
+}).observe(viewportEl);
 editor.setTool({ kind: 'select' });
 
 palette.addEventListener('click', (e) => {
@@ -116,8 +142,10 @@ document.querySelector('#clear-board')!.addEventListener('click', () => {
     .clear({ size, preset: 'bench' })
     .then(() => editor.say('Cleared. Ctrl+Z brings it back.'));
 });
-document.querySelector('#load-demo')!.addEventListener('click', async () => {
-  const demo = DEMOS[document.querySelector<HTMLSelectElement>('#demo-list')!.value]!;
+async function loadDemo(key: string): Promise<void> {
+  const demo = DEMOS[key];
+  if (!demo) return;
+  document.querySelector<HTMLSelectElement>('#demo-list')!.value = key;
   await host.group(true, 'load demo'); // the whole demo undoes as one step
   try {
     await host.clear({ size: demo.size ?? size, preset: 'bench' });
@@ -138,8 +166,18 @@ document.querySelector('#load-demo')!.addEventListener('click', async () => {
   const outs = Object.entries(demo.outputs)
     .map(([name, id]) => `${id} = ${name}`)
     .join(', ');
-  editor.say(`${demo.title}. Click the switches (${ins}); watch ${outs}.`);
-});
+  const clocked = demo.commands.some((c) => c.op === 'clock');
+  editor.say(
+    clocked
+      ? `${demo.title}. Select ${Object.values(demo.inputs).join(', ')} to change its frequency; watch ${outs}.`
+      : `${demo.title}. Click the switches (${ins}); watch ${outs}.`,
+  );
+}
+document
+  .querySelector('#load-demo')!
+  .addEventListener('click', () =>
+    loadDemo(document.querySelector<HTMLSelectElement>('#demo-list')!.value),
+  );
 
 // NovaLang scripting: the nova worker starts the first time the panel opens.
 const base = import.meta.env.BASE_URL;
@@ -167,20 +205,97 @@ mountScriptingPanel(
   base,
 );
 
+// ---- Zoom and pan: wheel zooms around the cursor; middle-drag or Space+drag pans.
+
+let pan: { id: number; x: number; y: number } | null = null;
+let spaceHeld = false;
+let overBoard = false;
+const setView = (f: (r: BoardRenderer) => BoardRenderer['view'], fit = false): void => {
+  renderer!.view = f(renderer!);
+  fitted = fit;
+  requestDraw();
+};
+const updateCursor = (): void => {
+  canvas.style.cursor = pan ? 'grabbing' : spaceHeld ? 'grab' : '';
+};
+const zoomCentre = (factor: number) =>
+  setView((r) => zoomAt(r.view, factor, { x: r.viewportSize.w / 2, y: r.viewportSize.h / 2 }));
+
+canvas.addEventListener(
+  'wheel',
+  (e) => {
+    e.preventDefault();
+    const at = renderer!.screenPoint(e.clientX, e.clientY);
+    setView((r) => zoomAt(r.view, wheelFactor(e.deltaY, e.deltaMode), at));
+  },
+  { passive: false },
+);
+// No middle-button autoscroll or paste on the board.
+canvas.addEventListener('mousedown', (e) => {
+  if (e.button === 1) e.preventDefault();
+});
+canvas.addEventListener('auxclick', (e) => e.preventDefault());
+document.querySelector('#zoom-in')!.addEventListener('click', () => zoomCentre(ZOOM_STEP));
+document.querySelector('#zoom-out')!.addEventListener('click', () => zoomCentre(1 / ZOOM_STEP));
+document
+  .querySelector('#zoom-fit')!
+  .addEventListener('click', () => setView((r) => fitView(r.boardSize, r.viewportSize), true));
+viewportEl.addEventListener('pointerenter', () => (overBoard = true));
+viewportEl.addEventListener('pointerleave', () => (overBoard = false));
+window.addEventListener('keydown', (e) => {
+  if (e.code !== 'Space' || !overBoard) return;
+  const t = e.target as HTMLElement | null;
+  if (t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName))) return;
+  // Space over the board means pan, not "press the focused button".
+  if (t?.tagName === 'BUTTON') t.blur();
+  e.preventDefault();
+  if (!spaceHeld) {
+    spaceHeld = true;
+    updateCursor();
+  }
+});
+const releaseSpace = (): void => {
+  spaceHeld = false;
+  updateCursor();
+};
+window.addEventListener('keyup', (e) => {
+  if (e.code === 'Space') releaseSpace();
+});
+window.addEventListener('blur', releaseSpace);
+
 const hit = (e: PointerEvent | MouseEvent) => renderer!.hitTest(e.clientX, e.clientY);
 const pitchPoint = (e: PointerEvent | MouseEvent) =>
   renderer!.layout.toPitch(renderer!.localPoint(e.clientX, e.clientY));
 
 canvas.addEventListener('pointerdown', (e) => {
+  if (e.button === 1 || (e.button === 0 && spaceHeld)) {
+    e.preventDefault();
+    canvas.setPointerCapture(e.pointerId);
+    pan = { id: e.pointerId, x: e.clientX, y: e.clientY };
+    updateCursor();
+    return;
+  }
   if (e.button !== 0) return;
   canvas.setPointerCapture(e.pointerId);
   void editor.pointerDown(hit(e), pitchPoint(e));
 });
 canvas.addEventListener('pointermove', (e) => {
+  if (pan && e.pointerId === pan.id) {
+    const dx = e.clientX - pan.x;
+    const dy = e.clientY - pan.y;
+    pan = { ...pan, x: e.clientX, y: e.clientY };
+    setView((r) => panBy(r.view, dx, dy));
+    return;
+  }
   pointer = renderer!.localPoint(e.clientX, e.clientY);
   editor.pointerMove(hit(e));
 });
 canvas.addEventListener('pointerup', (e) => {
+  if (pan && e.pointerId === pan.id) {
+    pan = null;
+    updateCursor();
+    return;
+  }
   if (e.button !== 0) return;
   void editor.pointerUp(hit(e));
 });
@@ -222,6 +337,12 @@ window.addEventListener('keydown', (e) => {
   } else if (mod && (key === 'y' || (key === 'z' && e.shiftKey))) {
     e.preventDefault();
     void redo();
+  } else if (!mod && !e.altKey && (e.key === '+' || e.key === '=')) {
+    zoomCentre(ZOOM_STEP);
+  } else if (!mod && !e.altKey && e.key === '-') {
+    zoomCentre(1 / ZOOM_STEP);
+  } else if (!mod && !e.altKey && e.key === '0') {
+    setView((r) => fitView(r.boardSize, r.viewportSize), true);
   } else if ((e.key === 'Delete' || e.key === 'Backspace') && editor.selected) {
     e.preventDefault();
     void editor.removeSelected();
@@ -320,4 +441,9 @@ async function openSharedLink(): Promise<void> {
   }
 }
 void openSharedLink();
+mountWelcome(
+  document.querySelector<HTMLDialogElement>('#welcome')!,
+  document.querySelector<HTMLButtonElement>('#help')!,
+  { loadDemo, suppress: location.hash.length > 1 },
+);
 window.addEventListener('hashchange', () => void openSharedLink());

@@ -61,3 +61,22 @@ export function deleteSave(name: string): void {
     /* nothing to do */
   }
 }
+
+const WELCOMED = 'breadboard:welcomed';
+
+/** Whether this browser has dismissed the "Start here" welcome. */
+export function welcomeSeen(): boolean {
+  try {
+    return store()?.getItem(WELCOMED) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function markWelcomeSeen(): void {
+  try {
+    store()?.setItem(WELCOMED, '1');
+  } catch {
+    // Not remembered: the welcome shows again next visit.
+  }
+}

@@ -1,0 +1,22 @@
+# clock_display.nova - a 2 Hz CLK lead blinks one segment of a 7-segment
+# display (bridge contract v3: board.display and board.clock).
+#
+# The CLK lead drives segment g through 330 ohm; the display's common cathode
+# goes to ground. Every 250 ms of sim time the script prints whether g is lit.
+
+board.new("half")
+board.ground("rail:bottom-:1")
+
+let ds = board.display("hole:e20")       # pins 1-5 at e20..e24, 6-10 in column i
+board.wire(ds["pins"]["3"], "rail:bottom-:22")   # common cathode (pin 8 is joined inside)
+
+let clk = board.clock("hole:a10", 2)     # square wave, high for 250 ms, low for 250 ms
+print("clock", clk["id"], "at", clk["at"], clk["hz"], "Hz")
+board.resistor(330, "hole:b10", ds["segments"]["g"])
+
+let seen = []
+for i in range(8) {
+    append(seen, sim.get(ds["id"])["state"]["segments"]["g"]["lit"])
+    board.run(250)
+}
+print("g lit:", seen)

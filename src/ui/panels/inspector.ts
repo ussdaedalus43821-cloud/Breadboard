@@ -46,7 +46,16 @@ export function mountInspector(root: HTMLElement, editor: Editor): () => void {
     const id = editor.selected;
     const part = id ? editor.current.parts.find((p) => p.id === id) : undefined;
     const lead = id ? editor.current.supplies.find((x) => x.id === id) : undefined;
-    root.hidden = !part && !lead;
+    // Always on screen (a fixed column), so selecting never resizes the board view.
+    root.classList.toggle('empty', !part && !lead);
+    if (!part && !lead) {
+      title.textContent = 'Inspector';
+      valueLabel.hidden = true;
+      periodLabel.hidden = true;
+      detail.textContent = 'Select a part or a supply lead (Select tool) to see it here.';
+      shown = '';
+      return;
+    }
     if (lead) {
       title.textContent = `${lead.id} · ${lead.kind === 'clock' ? 'clock lead' : lead.kind === 'power' ? '+5 V lead' : 'ground lead'}`;
       valueLabel.hidden = true;

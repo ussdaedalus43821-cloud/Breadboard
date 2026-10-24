@@ -6,7 +6,8 @@
 //   - netlify.toml and vercel.json send the COOP/COEP headers Pyodide needs.
 
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { bench, novaRuntime, read } from '../support/nova-node';
 import { benchCircuit, type Circuit } from '../../src/domain/circuit/circuit';
 import { applyCommand, type Command } from '../../src/domain/circuit/commands';
 import { SEGMENTS_FOR_DIGIT } from '../../src/domain/chips/sequential';
@@ -15,6 +16,7 @@ import { DEMOS } from '../../src/domain/demos';
 import { Simulation } from '../../src/domain/sim/engine';
 import { BRIDGE_COMMANDS, BRIDGE_OPS, BRIDGE_VERSION } from '../../src/protocol/bridge';
 import { handleBridge } from '../../src/worker/bridge';
+import { EXAMPLES } from '../../src/ui/panels/scripting-panel';
 import { SimService } from '../../src/worker/sim-service';
 
 const at =
@@ -112,6 +114,25 @@ describe('bridge contract v3', () => {
     expect(call(s, 'board.wire', 'pin:U1:14', 'rail:top+:1')).toMatchObject({ ok: true });
     expect(call(s, 'board.power', 'rail:top+:2')).toMatchObject({ ok: true });
     expect(call(s, 'board.step', 5)).toMatchObject({ ok: true, result: { ticks: 5 } });
+  });
+});
+
+describe('bridge v3 end to end from NovaLang', () => {
+  beforeAll(async () => {
+    await novaRuntime();
+  }, 60_000);
+
+  it('clock_display.nova blinks a segment from a 2 Hz CLK lead', async () => {
+    const { outcome, stdout } = await bench().run(read('public/nova/examples/clock_display.nova'));
+    expect(outcome).toEqual({ ok: true });
+    expect(stdout).toEqual([
+      'clock CLK1 at hole:a10 2 Hz',
+      'g lit: [true, false, true, false, true, false, true, false]',
+    ]);
+  });
+
+  it('is offered in the scripting panel', () => {
+    expect(EXAMPLES).toContain('clock_display.nova');
   });
 });
 

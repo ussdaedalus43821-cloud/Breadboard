@@ -446,3 +446,65 @@ diagonal segment resistors cover the display's box, so clicking the
 display selected a resistor. LEDs and resistors are now hit within half a
 pitch of the line between their leads. Chips, switches and displays keep
 the box. Wires are hit the same way, which is how they are probed.
+
+## D-045 — Bridge contract v3: board.display and board.clock (Accepted, Phase 7)
+
+Approved by the user. Scripts could not place a 7-segment display or a
+clock lead, so the Phase 6 circuits could only be built from the UI. v3
+adds `board.display(at)` (a part handle plus a `segments` map of pin keys)
+and `board.clock(at, hz=100)`. `hz` is given in hertz, the unit people
+think in, and must map to an even whole number of 1 ms ticks: the sim's
+clock toggles on whole ticks, and a rate that does not fit is refused
+rather than rounded.
+
+Backward compatibility is per op: `OP_SINCE` in `protocol/bridge.ts` says
+which version introduced each newer op, and a request with a lower `v` is
+refused with `<op> needs bridge contract v<n>`. Every v1 and v2 call works
+unchanged. `board.chip` also accepts the bare `74xx` names of the Phase 6
+chips (`"7432"`, `"7486"`, `"7474"`).
+
+## D-046 — Zoom and pan are a view transform in the renderer (Accepted, Phase 7)
+
+Supersedes D-038. The board is drawn through a `View` (zoom and offset,
+`ui/canvas/viewport.ts`) instead of resizing the layout: the canvas is the
+size of a fixed viewport box, and the renderer sets one canvas transform
+per frame. `hitTest` and `localPoint` undo the view, so the editor keeps
+working in board pixels and pitch points and needed no change for zoom.
+
+- Wheel zooms around the cursor (the board point under it stays put),
+  0.25× to 4×. Middle-drag or Space+drag pans. The **−** / **+** / **Fit**
+  buttons and the `-`, `+` and `0` keys do the same from the keyboard.
+- The view is clamped so at least 60 px of board stays on screen.
+- A fitted view (never past 100%) refits on window resize and when a load
+  changes the board size. Once the user zooms or pans, resizes keep their
+  view.
+- Space is the pan modifier only while the pointer is over the board, and
+  then it blurs a focused button rather than pressing it.
+- The inspector is now a fixed column with an empty state. Before, it
+  appeared on selection and shrank the board box, which cut off a zoomed
+  view mid-click.
+
+## D-047 — Hosting sends COOP/COEP from the host's config (Accepted, Phase 7)
+
+The NovaLang bridge needs `SharedArrayBuffer` and `Atomics.wait` (D-026),
+which browsers only enable on a cross-origin-isolated page. The dev and
+preview servers already send `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp` (vite.config.ts). For
+production, `netlify.toml` and `vercel.json` send both headers on every
+path. All assets, Pyodide included, are same-origin, so `require-corp`
+blocks nothing. A test parses both files and checks the headers. Netlify
+also caches `/pyodide/*` as immutable: those files are named by the
+Pyodide version they come from.
+
+## D-048 — A "Start here" dialog on first load (Accepted, Phase 7)
+
+A native `<dialog>`, which brings focus handling, Escape and a backdrop
+for free. It offers the clocked counter, the half adder, or an empty bench,
+and is remembered in localStorage once closed (any way). Access is
+guarded: with storage blocked it shows on every visit, which is harmless.
+It does not open over a shared link, since that visitor came for a
+particular circuit. The toolbar's **?** button opens it again.
+
+The clocked counter demo is the manual decade counter with SW1, its
+pull-down and its +5 V wire replaced by a 1 Hz CLK lead at `a47`, so it
+counts without any clicks.

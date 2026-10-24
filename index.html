@@ -104,7 +104,8 @@
         align-items: flex-start;
       }
       #inspector {
-        min-width: 220px;
+        flex: 0 0 280px;
+        box-sizing: border-box;
         padding: 10px 12px;
         border: 1px solid #4a4d55;
         border-radius: 8px;
@@ -114,8 +115,8 @@
         display: grid;
         gap: 8px;
       }
-      #inspector[hidden] {
-        display: none;
+      #inspector.empty {
+        color: #9aa0a6;
       }
       .inspector-title {
         font-weight: 600;
@@ -125,9 +126,75 @@
         min-width: 11ch;
         padding: 0 6px;
       }
+      #welcome {
+        max-width: 34rem;
+        padding: 20px 24px;
+        border: 1px solid #4a4d55;
+        border-radius: 10px;
+        background: #2f3136;
+        color: inherit;
+      }
+      #welcome::backdrop {
+        background: rgb(0 0 0 / 55%);
+      }
+      #welcome h2 {
+        margin: 0 0 8px;
+      }
+      #welcome ul {
+        padding-left: 1.2em;
+        color: #c3c7cc;
+      }
+      .welcome-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+      .welcome-actions button {
+        font: inherit;
+        padding: 6px 12px;
+        border: 1px solid #4a4d55;
+        border-radius: 6px;
+        background: #383a40;
+        color: inherit;
+      }
+      .welcome-actions button[value='decade-counter-clocked'] {
+        background: #2b8a3e;
+        border-color: #2f9e44;
+      }
+      #board-viewport {
+        position: relative;
+        flex: 1 1 640px;
+        min-width: 300px;
+        height: 440px;
+        overflow: hidden;
+        border-radius: 8px;
+        background: #26282c;
+      }
       #board {
         display: block;
         touch-action: none;
+      }
+      #view-controls {
+        position: absolute;
+        top: 6px;
+        right: 6px;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px;
+        border-radius: 6px;
+        background: rgb(38 40 44 / 85%);
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+      }
+      #view-controls button {
+        min-width: 26px;
+        padding: 2px 6px;
+      }
+      #zoom-level {
+        min-width: 5ch;
+        text-align: center;
       }
       #status,
       #hover {
@@ -282,6 +349,7 @@
         </select>
         <button type="button" id="load-demo">Load demo</button>
         <button type="button" id="clear-board">Clear board</button>
+        <button type="button" id="help" title="Start here" aria-label="Start here">?</button>
       </div>
       <div id="circuit-controls" role="toolbar" aria-label="Circuit">
         <button type="button" id="undo" disabled title="Ctrl+Z">Undo</button>
@@ -295,8 +363,18 @@
         <input id="share-url" readonly aria-label="Shareable link" hidden />
       </div>
       <div id="workspace">
-        <canvas id="board"></canvas>
-        <aside id="inspector" hidden aria-label="Inspector"></aside>
+        <div id="board-viewport">
+          <canvas id="board"></canvas>
+          <div id="view-controls" role="toolbar" aria-label="Zoom">
+            <button type="button" id="zoom-out" title="Zoom out (−)" aria-label="Zoom out">
+              −
+            </button>
+            <span id="zoom-level" aria-live="polite">100%</span>
+            <button type="button" id="zoom-in" title="Zoom in (+)" aria-label="Zoom in">+</button>
+            <button type="button" id="zoom-fit" title="Fit the board (0)">Fit</button>
+          </div>
+        </div>
+        <aside id="inspector" aria-label="Inspector"></aside>
       </div>
       <button
         type="button"
@@ -328,6 +406,22 @@
         <summary>Logic analyzer (0/4)</summary>
       </details>
     </main>
+    <dialog id="welcome" aria-labelledby="welcome-title">
+      <form method="dialog">
+        <h2 id="welcome-title">Start here</h2>
+        <p>Welcome to Breadboard. Load a demo to get started, or click parts to build.</p>
+        <ul>
+          <li>Pick a part in the palette, then click a hole. Drag between holes to wire.</li>
+          <li>The Select tool flips switches and opens the inspector; Delete removes.</li>
+          <li>Scroll to zoom, middle-drag or Space+drag to pan, 0 to fit.</li>
+        </ul>
+        <div class="welcome-actions">
+          <button value="decade-counter-clocked" autofocus>Load the counter demo</button>
+          <button value="half-adder">Load the half adder</button>
+          <button value="build">Start building</button>
+        </div>
+      </form>
+    </dialog>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

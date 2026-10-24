@@ -4,7 +4,7 @@
 import type { CircuitHost } from '../../protocol/circuit-host';
 import { DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS, type NovaClient } from '../nova-client';
 
-export const EXAMPLES = ['half_adder.nova', 'test_vectors.nova'] as const;
+export const EXAMPLES = ['half_adder.nova', 'test_vectors.nova', 'clock_display.nova'] as const;
 
 export interface ScriptingPanelElements {
   readonly toggle: HTMLButtonElement;

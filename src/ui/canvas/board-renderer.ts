@@ -1,5 +1,5 @@
 // Draws the breadboard, placed parts, wires and the editor preview, and
-// hit-tests holes. No sim state yet (Phase 2).
+// hit-tests holes, through a zoom/pan view (viewport.ts).
 
 import {
   boardTerminals,
@@ -16,6 +16,7 @@ import type { Level } from '../../domain/sim/solver';
 import type { Preview } from '../editor/editor';
 import { createBoardLayout, type BoardLayout } from './board-layout';
 import { drawPart, drawSupply, drawWire } from './part-shapes';
+import { IDENTITY, clampView, toBoard, type Size, type View } from './viewport';
 
 /** Analyzer channel colours, shared with the analyzer panel. */
 export const PROBE_COLORS = ['#ffd43b', '#63e6be', '#74c0fc', '#f783ac'];
@@ -50,41 +51,77 @@ const THEME = {
 export class BoardRenderer {
   readonly layout: BoardLayout;
   private readonly ctx: CanvasRenderingContext2D;
+  private viewport: Size;
+  private current: View = IDENTITY;
 
+  /** `viewport` is the canvas's CSS size; the board is drawn into it through `view`. */
   constructor(
     private readonly canvas: HTMLCanvasElement,
     readonly spec: BoardSpec,
+    viewport?: Size,
     pitchPx = 20,
   ) {
     this.layout = createBoardLayout(spec, pitchPx);
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Canvas 2D is not available');
     this.ctx = ctx;
+    this.viewport = viewport ?? this.boardSize;
+    this.resize(this.viewport);
+  }
+
+  /** The board's size in board pixels (zoom 1). */
+  get boardSize(): Size {
+    return { w: this.layout.widthPx, h: this.layout.heightPx };
+  }
+
+  get viewportSize(): Size {
+    return this.viewport;
+  }
+
+  get view(): View {
+    return this.current;
+  }
+
+  /** Set the view; it is clamped so some of the board stays visible. */
+  set view(v: View) {
+    this.current = clampView(v, this.boardSize, this.viewport);
+  }
+
+  resize(viewport: Size): void {
+    this.viewport = viewport;
     const dpr = globalThis.devicePixelRatio || 1;
-    canvas.width = Math.round(this.layout.widthPx * dpr);
-    canvas.height = Math.round(this.layout.heightPx * dpr);
-    canvas.style.width = `${this.layout.widthPx}px`;
-    canvas.style.height = `${this.layout.heightPx}px`;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.canvas.width = Math.round(viewport.w * dpr);
+    this.canvas.height = Math.round(viewport.h * dpr);
+    this.canvas.style.width = `${viewport.w}px`;
+    this.canvas.style.height = `${viewport.h}px`;
+    this.view = this.current;
   }
 
   /** The board terminal under a mouse event's position, or null. */
   hitTest(clientX: number, clientY: number): BoardTerminal | null {
-    const rect = this.canvas.getBoundingClientRect();
-    const p = this.layout.toPitch({ x: clientX - rect.left, y: clientY - rect.top });
+    const p = this.layout.toPitch(this.localPoint(clientX, clientY));
     return terminalAtPoint(this.spec, p.x, p.y);
   }
 
-  /** Canvas-local pixel position of a pointer event. */
-  localPoint(clientX: number, clientY: number): { x: number; y: number } {
+  /** Viewport pixel position of a pointer event (for zooming around it). */
+  screenPoint(clientX: number, clientY: number): { x: number; y: number } {
     const rect = this.canvas.getBoundingClientRect();
     return { x: clientX - rect.left, y: clientY - rect.top };
+  }
+
+  /** Board pixel position of a pointer event, the view undone. */
+  localPoint(clientX: number, clientY: number): { x: number; y: number } {
+    return toBoard(this.current, this.screenPoint(clientX, clientY));
   }
 
   draw(scene: Scene = {}): void {
     const { ctx, layout, spec } = this;
     const px = layout.pitchPx;
-    ctx.clearRect(0, 0, layout.widthPx, layout.heightPx);
+    const dpr = globalThis.devicePixelRatio || 1;
+    const v = this.current;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.setTransform(dpr * v.zoom, 0, 0, dpr * v.zoom, dpr * v.x, dpr * v.y);
 
     ctx.fillStyle = THEME.board;
     ctx.strokeStyle = THEME.boardEdge;

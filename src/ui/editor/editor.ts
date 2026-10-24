@@ -3,7 +3,7 @@
 // pitch points, not pixels, so it is testable without a DOM; the canvas layer
 // converts pointer events.
 
-import type { BoardTerminal, Point } from '../../domain/breadboard/spec';
+import { terminalPosition, type BoardTerminal, type Point } from '../../domain/breadboard/spec';
 import { pin, terminalKey, type TerminalKey } from '../../domain/breadboard/terminal';
 import {
   occupancy,
@@ -11,12 +11,25 @@ import {
   partAtPoint,
   wireAtPoint,
   type Circuit,
+  type Supply,
 } from '../../domain/circuit/circuit';
 import { applyCommand, type Command } from '../../domain/circuit/commands';
 import { footprintAt } from '../../domain/parts/footprint';
 import { getPartDef } from '../../domain/parts/registry';
 import type { Level } from '../../domain/sim/solver';
 import type { CircuitHost, SimFrame } from '../../protocol/circuit-host';
+
+/**
+ * The supply lead whose tag is under `p` (pitch units). Tags are drawn left of
+ * the lead's hole (part-shapes.ts drawSupply): x from -1.85 to 0, y ±0.35.
+ */
+export function supplyTagAt(c: Circuit, p: Point): Supply | undefined {
+  return c.supplies.find((s) => {
+    const at = terminalPosition(c.spec, s.at);
+    const dx = p.x - at.x;
+    return dx >= -1.85 && dx <= 0 && Math.abs(p.y - at.y) <= 0.4;
+  });
+}
 
 /** Logic-analyzer channels (matches the sim worker's trace). */
 export const MAX_PROBES = 4;
@@ -262,9 +275,15 @@ export class Editor {
   private async selectAt(t: BoardTerminal | null, point?: Point): Promise<void> {
     const c = this.current;
     const who = t ? occupancy(c).get(terminalKey(t)) : undefined;
-    if (who?.kind === 'supply') {
-      this.selected = who.supply;
-      this.message = `Selected ${who.supply}.`;
+    const supply =
+      who?.kind === 'supply' ? who.supply : !who && point ? supplyTagAt(c, point)?.id : undefined;
+    if (supply) {
+      this.selected = supply;
+      const lead = c.supplies.find((x) => x.id === supply);
+      this.message =
+        lead?.kind === 'clock'
+          ? `Selected ${supply}: pick its frequency in the inspector.`
+          : `Selected ${supply}.`;
       this.onChange();
       return;
     }

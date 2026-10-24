@@ -60,7 +60,8 @@ src/
                      host.py into a Pyodide; shared with the tests),
                      host.py (the board/sim globals and the script runner)
   ui/              everything that touches the DOM or a canvas
-    canvas/          board-renderer.ts, board-layout.ts, part-shapes.ts
+    canvas/          board-renderer.ts, board-layout.ts, part-shapes.ts,
+                     viewport.ts (zoom/pan math, D-046)
     editor/          editor.ts: palette tool, click-to-place, drag-to-wire,
                      select (inspector), click-to-toggle switches (no DOM)
     persistence/     storage.ts (named saves in localStorage), share.ts
@@ -470,8 +471,9 @@ One phase per session. Each ends with green tests, a demo script in
 | 3     | 74xx chips as data (7400, then 7402/7404/7408 from one `gate.ts` builder). Half-adder demo                                |
 | 4     | Stage-2 electrical: resistor-limited LED current, drive-strength contention warnings                                      |
 | 4.5   | NovaLang integration per `NOVALANG_BRIDGE.md`. Additive only; `domain/` is not touched                                    |
-| 5     | Save/load, undo/redo, inspector (resistor values), shareable URLs. Zoom/pan deferred (D-038)                              |
+| 5     | Save/load, undo/redo, inspector (resistor values), shareable URLs. Zoom/pan deferred (D-038, done in Phase 7)             |
 | 6     | 74HC32/86, 74HC74 flip-flops, 74HC4511, 7-segment display, clock lead, logic analyzer; flip-flop and decade-counter demos |
+| 7     | Zoom/pan, clock and display inspector, bridge contract v3, Netlify/Vercel COOP/COEP config, "Start here" dialog           |
 
 ## 8. NovaLang as a dependency
 
@@ -489,3 +491,20 @@ One phase per session. Each ends with green tests, a demo script in
 - Breadboard's own Python glue (`src/nova/host.py`) is never mixed into
   the vendored files.
 - Example scripts live in `public/nova/examples/`.
+
+## 9. Deployment
+
+`npm run build` type-checks and writes a static site to `dist/`, Pyodide
+included (served at `/pyodide/`). Any static host works if it sends two
+headers on every response:
+
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+Without them the page still works, but the NovaLang panel cannot start:
+the bridge needs `SharedArrayBuffer` (D-026, D-047). `netlify.toml` and
+`vercel.json` at the repo root set the build command, the output
+directory and the headers. `npm run preview` serves `dist/` with the same
+headers, for a local check.
