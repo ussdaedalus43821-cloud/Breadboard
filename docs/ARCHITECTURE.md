@@ -17,7 +17,7 @@ solderless breadboard using real-world parts: 74xx chips, LEDs, resistors,
 switches, jumper wires, power rails. The simulation is written in
 TypeScript and runs in a Web Worker. **NovaLang** (a separate,
 hand-written scripting language, treated as a third-party library) is the
-*scripting layer*. It authors, tests and drives circuits. It is **not** the
+_scripting layer_. It authors, tests and drives circuits. It is **not** the
 simulation engine.
 
 Stack (decided): Vite + TypeScript + Vitest, Canvas 2D rendering, the sim in
@@ -53,7 +53,7 @@ ui ──► protocol ──► domain
 
 Rules:
 
-1. **`src/domain/**` imports only from `src/domain/**`.** It never imports
+1. **`src/domain/**`imports only from`src/domain/**`.** It never imports
    `ui/`, `worker/`, `protocol/` or any DOM API. ESLint enforces this with
    `import/no-restricted-paths`. `no-restricted-globals` bans `window`,
    `document`, `localStorage` and similar inside `domain/`. A Vitest test
@@ -88,7 +88,7 @@ Rules:
   delete) and NovaLang commands both go through the same command
   dispatcher in the sim worker. They are two clients of one API, and
   neither one mutates state directly.
-- **The UI never computes sim state.** The sim worker posts *frames*:
+- **The UI never computes sim state.** The sim worker posts _frames_:
   changed net levels, LED states and warnings. The renderer draws whatever
   the latest frame says.
 - **The NovaLang worker talks only to the sim worker**, over a
@@ -127,11 +127,11 @@ type TerminalRef = HoleRef | RailRef | PinRef
 Each one has exactly one **canonical string key**, and `terminalKey` and
 `parseTerminal` round-trip exactly:
 
-| Ref                                      | Key           |
-| ---------------------------------------- | ------------- |
-| `{kind:'hole', column:'e', row:15}`      | `hole:e15`    |
-| `{kind:'rail', rail:'top+', index:3}`    | `rail:top+:3` |
-| `{kind:'pin', part:'U1', pin:'14'}`      | `pin:U1:14`   |
+| Ref                                   | Key           |
+| ------------------------------------- | ------------- |
+| `{kind:'hole', column:'e', row:15}`   | `hole:e15`    |
+| `{kind:'rail', rail:'top+', index:3}` | `rail:top+:3` |
+| `{kind:'pin', part:'U1', pin:'14'}`   | `pin:U1:14`   |
 
 - Keys are what crosses JSON boundaries (saves, protocol, NovaLang).
   Objects are what domain code passes around. Convert only with
@@ -140,7 +140,7 @@ Each one has exactly one **canonical string key**, and `terminalKey` and
 - Part ids match `^[A-Za-z][A-Za-z0-9_]*$`. Pin names match
   `^[A-Za-z0-9_]+$`. That way `:` can never be ambiguous.
 - **Holes and rail holes** exist because the board spec says so.
-  **Pins** exist because a part is placed. Placing a part *connects* each
+  **Pins** exist because a part is placed. Placing a part _connects_ each
   pin to the hole it sits in, and that connection is an ordinary netlist
   union.
 - **Wire ends are holes or rail holes.** A wire is a pair of board
@@ -173,10 +173,10 @@ merge or split.
 (1 unit = 0.1" = 2.54 mm). The renderer turns pitch coordinates into
 pixels, so domain code never knows about pixels.
 
-| Size              | Rows | Terminal holes | Rail holes      | Tie points |
-| ----------------- | ---- | -------------- | --------------- | ---------- |
-| `half` (default)  | 30   | 300            | 4 × 25 = 100    | 400        |
-| `full`            | 63   | 630            | 4 × 50 = 200    | 830        |
+| Size             | Rows | Terminal holes | Rail holes   | Tie points |
+| ---------------- | ---- | -------------- | ------------ | ---------- |
+| `half` (default) | 30   | 300            | 4 × 25 = 100 | 400        |
+| `full`           | 63   | 630            | 4 × 50 = 200 | 830        |
 
 - Columns `a–e` and `f–j` with a 0.3" centre channel between `e` and `f`
   (exactly the width of a DIP package, so a 74xx chip straddles it).
@@ -200,15 +200,13 @@ switch positions.
   "version": 1,
   "board": { "size": "half", "splitRails": false },
   "parts": [
-    { "id": "U1",  "type": "chip7400", "at": "hole:e10" },
+    { "id": "U1", "type": "chip7400", "at": "hole:e10" },
     { "id": "SW1", "type": "switch-spdt", "at": "hole:a3", "state": { "position": 0 } },
-    { "id": "D1",  "type": "led-red", "pins": { "anode": "hole:b20", "cathode": "hole:b21" } }
+    { "id": "D1", "type": "led-red", "pins": { "anode": "hole:b20", "cathode": "hole:b21" } }
   ],
-  "wires": [
-    { "id": "W1", "from": "hole:a4", "to": "hole:a10", "color": "yellow" }
-  ],
+  "wires": [{ "id": "W1", "from": "hole:a4", "to": "hole:a10", "color": "yellow" }],
   "supplies": [
-    { "id": "VCC", "kind": "power",  "at": "rail:top+:1", "volts": 5 },
+    { "id": "VCC", "kind": "power", "at": "rail:top+:1", "volts": 5 },
     { "id": "GND", "kind": "ground", "at": "rail:top-:1" }
   ],
   "meta": { "title": "Half adder", "created": "2026-10-24T00:00:00Z" }
@@ -234,15 +232,15 @@ One phase per session. Each ends with green tests, a demo script in
 `docs/demos/`, and acceptance encoded as Vitest integration tests under
 `tests/acceptance/`.
 
-| Phase | Scope |
-| ----- | ----- |
-| 0     | Skeleton, board spec, netlist, empty board render with hole hit-testing |
-| 1     | Parts registry, click-to-place, drag-to-wire, palette |
+| Phase | Scope                                                                                                           |
+| ----- | --------------------------------------------------------------------------------------------------------------- |
+| 0     | Skeleton, board spec, netlist, empty board render with hole hit-testing                                         |
+| 1     | Parts registry, click-to-place, drag-to-wire, palette                                                           |
 | 2     | Stage-1 logic sim in the sim worker (0/1/Z, floating-input warning). Switch → wire → LED lights. First playable |
-| 3     | 74xx chips as data (7400, then 7402/7404/7408 from one `gate.ts` builder). Half-adder demo |
-| 4     | Stage-2 electrical: resistor-limited LED current, drive-strength contention warnings |
-| 4.5   | NovaLang integration per `NOVALANG_BRIDGE.md`. Additive only; `domain/` is not touched |
-| 5     | Save/load, undo/redo, inspector, zoom/pan, shareable URLs |
+| 3     | 74xx chips as data (7400, then 7402/7404/7408 from one `gate.ts` builder). Half-adder demo                      |
+| 4     | Stage-2 electrical: resistor-limited LED current, drive-strength contention warnings                            |
+| 4.5   | NovaLang integration per `NOVALANG_BRIDGE.md`. Additive only; `domain/` is not touched                          |
+| 5     | Save/load, undo/redo, inspector, zoom/pan, shareable URLs                                                       |
 
 ## 8. NovaLang as a dependency
 

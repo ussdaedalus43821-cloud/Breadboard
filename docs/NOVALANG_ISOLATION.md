@@ -1,7 +1,7 @@
 # NovaLang Isolation
 
 What a NovaLang script running inside Breadboard **cannot** do, and which
-layer makes each guarantee true. This follows NovaLang's own *Security*
+layer makes each guarantee true. This follows NovaLang's own _Security_
 section: `python.*` is "a deliberate, narrow bridge, not unrestricted
 access to the host process". Breadboard keeps that bridge exactly as
 narrow and adds browser-level walls around it.
@@ -23,17 +23,17 @@ That is the whole list.
 
 ## 2. What a script cannot do
 
-| A script cannot… | Why it can't |
-| ---------------- | ------------ |
-| Touch `window`, `document`, the DOM, `localStorage`, `sessionStorage`, cookies | It runs in a dedicated Web Worker, which has no `window`, DOM or Web Storage. The main thread never evaluates script-provided strings. |
-| Use `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `importScripts`, `indexedDB`, `caches`, `BroadcastChannel` | The nova worker deletes or overrides these globals after Pyodide and the vendored NovaLang files have loaded, and **before** any user script runs. Pyodide's package loader is disabled at the same point (`loadPackage`/`micropip` are unavailable). |
-| `python.import("os")`, `"sys"`, `"subprocess"`, `"js"`, `"pyodide"`, … | NovaLang's own `PYTHON_IMPORT_ALLOWLIST` refuses them with `PythonError`. Breadboard never calls `Nova.expose_module`, so the allowlist is never widened. `js` and `pyodide`, the two modules that would reach the worker's JavaScript, are specifically never exposed. |
-| Reach Python objects beyond `board` and `sim` | Only those two are bound, with `expose_global`. NovaLang's live proxy exposes only `dir()`-visible, non-underscore attributes, so the proxy classes keep **every** internal (port, buffers, counters) underscore-prefixed. Their public surface is exactly the 13 bridge calls. Every return value is a fresh plain `dict`/`list`/`str`/number, never a live object. |
-| Read or write the user's files | NovaLang's `read`/`write`/`exists` reach only Pyodide's in-memory Emscripten filesystem: a scratch directory that starts empty, is never synced to IndexedDB, and is discarded when the worker restarts. `input()` raises. |
-| Touch the solver, tick loop, netlist, circuit object or renderer | Those live in the **sim worker**, a different thread with a different heap. The only path in is the JSON bridge, and the sim worker validates every request (`op` on the fixed list, `args` type-checked, TerminalRefs parsed and bounds-checked) before acting. There is no `eval` op. |
-| Hang the sim | Every bridge command does bounded work (`board.run` ≤ 10 000 ms of sim time, `board.step` ≤ 100 000 ticks, part and wire caps; see `NOVALANG_BRIDGE.md` §6). The sim worker stays responsive to the UI between bridge calls, and the UI keeps rendering while a script runs. |
-| Hang the page, or itself forever | The **watchdog** (§3). |
-| Survive its own crash with state | Each run starts from a fresh `Nova()` instance. Nothing a script defines carries over to the next run. The only persistent effect of a script is the circuit it built through `board.*`. |
+| A script cannot…                                                                                                      | Why it can't                                                                                                                                                                                                                                                                                                                                                         |
+| --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Touch `window`, `document`, the DOM, `localStorage`, `sessionStorage`, cookies                                        | It runs in a dedicated Web Worker, which has no `window`, DOM or Web Storage. The main thread never evaluates script-provided strings.                                                                                                                                                                                                                               |
+| Use `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `importScripts`, `indexedDB`, `caches`, `BroadcastChannel` | The nova worker deletes or overrides these globals after Pyodide and the vendored NovaLang files have loaded, and **before** any user script runs. Pyodide's package loader is disabled at the same point (`loadPackage`/`micropip` are unavailable).                                                                                                                |
+| `python.import("os")`, `"sys"`, `"subprocess"`, `"js"`, `"pyodide"`, …                                                | NovaLang's own `PYTHON_IMPORT_ALLOWLIST` refuses them with `PythonError`. Breadboard never calls `Nova.expose_module`, so the allowlist is never widened. `js` and `pyodide`, the two modules that would reach the worker's JavaScript, are specifically never exposed.                                                                                              |
+| Reach Python objects beyond `board` and `sim`                                                                         | Only those two are bound, with `expose_global`. NovaLang's live proxy exposes only `dir()`-visible, non-underscore attributes, so the proxy classes keep **every** internal (port, buffers, counters) underscore-prefixed. Their public surface is exactly the 13 bridge calls. Every return value is a fresh plain `dict`/`list`/`str`/number, never a live object. |
+| Read or write the user's files                                                                                        | NovaLang's `read`/`write`/`exists` reach only Pyodide's in-memory Emscripten filesystem: a scratch directory that starts empty, is never synced to IndexedDB, and is discarded when the worker restarts. `input()` raises.                                                                                                                                           |
+| Touch the solver, tick loop, netlist, circuit object or renderer                                                      | Those live in the **sim worker**, a different thread with a different heap. The only path in is the JSON bridge, and the sim worker validates every request (`op` on the fixed list, `args` type-checked, TerminalRefs parsed and bounds-checked) before acting. There is no `eval` op.                                                                              |
+| Hang the sim                                                                                                          | Every bridge command does bounded work (`board.run` ≤ 10 000 ms of sim time, `board.step` ≤ 100 000 ticks, part and wire caps; see `NOVALANG_BRIDGE.md` §6). The sim worker stays responsive to the UI between bridge calls, and the UI keeps rendering while a script runs.                                                                                         |
+| Hang the page, or itself forever                                                                                      | The **watchdog** (§3).                                                                                                                                                                                                                                                                                                                                               |
+| Survive its own crash with state                                                                                      | Each run starts from a fresh `Nova()` instance. Nothing a script defines carries over to the next run. The only persistent effect of a script is the circuit it built through `board.*`.                                                                                                                                                                             |
 
 ## 3. Watchdog
 
@@ -59,7 +59,7 @@ enforced from outside the nova worker:
 4. The bridge-call cap (100 000 per run) catches runaway loops of cheap
    calls before the wall-clock limit does.
 
-## 4. Things that are deliberately *not* isolation
+## 4. Things that are deliberately _not_ isolation
 
 - **Determinism is not a security property.** `random` is allowed. Scripts
   that want reproducibility seed it themselves.
