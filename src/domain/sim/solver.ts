@@ -12,12 +12,20 @@
 //   6. Warnings: floating chip inputs, unpowered chips, shorts.
 
 import { UnionFind } from '../breadboard/netlist';
-import { pin, terminalKey, type TerminalKey, type TerminalRef } from '../breadboard/terminal';
+import {
+  parseTerminal,
+  pin,
+  terminalKey,
+  type TerminalKey,
+  type TerminalRef,
+} from '../breadboard/terminal';
 import { circuitNetlist, type Circuit } from '../circuit/circuit';
 import { getPartDef } from '../parts/registry';
 import type { PlacedPart } from '../parts/types';
 
-export type Level = 0 | 1 | 'Z' | 'X';
+import type { Level } from './levels';
+
+export type { Level } from './levels';
 export type Strength = 'strong' | 'weak' | 'none';
 
 export interface SolvedNet {
@@ -74,7 +82,10 @@ function closedContacts(part: PlacedPart): Array<[string, string]> {
   }
 }
 
-export function solve(circuit: Circuit): SimResult {
+/** Levels chip outputs are currently driving, by pin key. `Z` (or absent) drives nothing. */
+export type OutputLevels = ReadonlyMap<TerminalKey, Level>;
+
+export function solve(circuit: Circuit, outputs: OutputLevels = new Map()): SimResult {
   const base = circuitNetlist(circuit);
 
   // 2. Merge base nets through closed switch contacts.
@@ -105,14 +116,23 @@ export function solve(circuit: Circuit): SimResult {
   }
   const netOf = (ref: TerminalRef): string => groupOfBase.get(base.netOf(ref))!;
 
-  // 3. Strong drivers.
-  const strong = new Map<string, Set<0 | 1>>();
-  const drive = (net: string, level: 0 | 1): void => {
+  // 3. Strong drivers: supply leads and chip outputs.
+  const strong = new Map<string, Set<Level>>();
+  const drivers = new Map<string, string[]>(); // net → who drives it, for SHORT messages
+  const drive = (net: string, level: Level, who: string): void => {
     const set = strong.get(net) ?? new Set();
     set.add(level);
     strong.set(net, set);
+    drivers.set(net, [...(drivers.get(net) ?? []), who]);
   };
-  for (const s of circuit.supplies) drive(netOf(s.at), s.kind === 'power' ? 1 : 0);
+  for (const s of circuit.supplies) {
+    drive(netOf(s.at), s.kind === 'power' ? 1 : 0, terminalKey(s.at));
+  }
+  for (const [key, lv] of outputs) {
+    if (lv === 'Z') continue;
+    const ref = parseTerminal(key);
+    if (base.has(ref)) drive(netOf(ref), lv, key);
+  }
 
   const level = new Map<string, Level>();
   const strength = new Map<string, Strength>();
@@ -120,12 +140,15 @@ export function solve(circuit: Circuit): SimResult {
   for (const [net, set] of strong) {
     level.set(net, set.size === 1 ? [...set][0]! : 'X');
     strength.set(net, 'strong');
-    if (set.size > 1) {
-      const at = circuit.supplies.filter((s) => netOf(s.at) === net).map((s) => terminalKey(s.at));
+    if (set.has(0) && set.has(1)) {
+      const at = [...drivers.get(net)!].sort(natural);
+      const onlySupplies = at.every((k) => !k.startsWith('pin:'));
       warnings.push({
         code: 'SHORT',
-        message: `+5 V is shorted to ground (${at.join(', ')})`,
-        at: at.sort(byKey),
+        message: onlySupplies
+          ? `+5 V is shorted to ground (${at.join(', ')})`
+          : `drivers fight over one net, high against low (${at.join(', ')})`,
+        at,
       });
     }
   }

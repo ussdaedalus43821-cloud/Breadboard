@@ -2,6 +2,7 @@
 
 import type { ColumnLetter, TerminalKey } from '../breadboard/terminal';
 import type { BoardTerminal } from '../breadboard/spec';
+import type { ChipLogic } from '../chips/gate';
 
 /**
  * What a pin does electrically. `input` pins must not float; `output` pins
@@ -46,6 +47,8 @@ export interface PartDef {
   readonly anchorColumns?: readonly ColumnLetter[];
   /** Static electrical properties; read by the sim from Phase 2 on. */
   readonly props: Readonly<Record<string, string | number>>;
+  /** Logic chips only: gates, supply pins, propagation delay (domain/chips). */
+  readonly logic?: ChipLogic;
 }
 
 /** A part on the board. Every pin maps to the board terminal (hole or rail hole) it sits in. */

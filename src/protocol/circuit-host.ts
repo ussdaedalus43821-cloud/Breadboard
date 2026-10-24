@@ -3,10 +3,11 @@
 
 import type { Circuit } from '../domain/circuit/circuit';
 import type { Command, CommandError } from '../domain/circuit/commands';
-import type { SimFrame } from './sim-protocol';
+import type { BoardSize } from '../domain/breadboard/spec';
+import type { SimFrame, SimTime } from './sim-protocol';
 
 export type { Command, CommandError } from '../domain/circuit/commands';
-export type { SimFrame } from './sim-protocol';
+export type { SimFrame, SimTime } from './sim-protocol';
 
 export type HostResult =
   | { readonly ok: true; readonly id: string }
@@ -15,6 +16,16 @@ export type HostResult =
       readonly error: CommandError | { readonly code: string; readonly message: string };
     };
 
+export type TimeResult =
+  | { readonly ok: true; readonly time: SimTime }
+  | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } };
+
+export interface ResetOptions {
+  readonly size?: BoardSize;
+  readonly splitRails?: boolean;
+  readonly preset?: 'bench' | 'empty';
+}
+
 export interface CircuitHost {
   /** Apply one edit. Resolves after the circuit and frame for it have been delivered (or refused). */
   apply(cmd: Command): Promise<HostResult>;
@@ -22,4 +33,12 @@ export interface CircuitHost {
   subscribe(listener: (circuit: Circuit) => void): () => void;
   /** Called with the latest sim frame as soon as there is one, then after every re-solve. */
   subscribeFrames(listener: (frame: SimFrame) => void): () => void;
+  /** Advance exactly `ticks` sim ticks (1 tick = 1 ms). */
+  step(ticks: number): Promise<TimeResult>;
+  /** Advance `ms` of sim time. */
+  run(ms: number): Promise<TimeResult>;
+  /** Start or pause the real-time 1 kHz clock. */
+  setRunning(running: boolean): Promise<TimeResult>;
+  /** Discard the circuit and start a fresh board. */
+  reset(options?: ResetOptions): Promise<void>;
 }

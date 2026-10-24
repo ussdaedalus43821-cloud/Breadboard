@@ -36,8 +36,11 @@ src/
     circuit/         circuit.ts (Circuit, supplies, occupancy, circuitNetlist,
                      benchCircuit), commands.ts (the edit dispatcher: place,
                      placeLeads, wire, power, ground, set, remove)
-    sim/             solver.ts: Stage-1 logic solver (§4a); Stage-2 electrical (Phase 4)
-    chips/           (Phase 3)  74xx chips as data, gate.ts builder
+    sim/             solver.ts: Stage-1 logic solver (§4a); engine.ts: ticks
+                     and propagation delay (§4b); Stage-2 electrical (Phase 4)
+    chips/           gate.ts (gate functions, ChipLogic, dipFootprint, the
+                     gateChip builder), catalog.ts (74HC00/02/04/08)
+    demos/           demo circuits as command lists (half-adder.ts)
   protocol/        JSON message types between main thread and workers:
                      sim-protocol.ts (requests, responses, circuit/frame pushes),
                      circuit-host.ts (the UI's one door into the Circuit)
@@ -189,8 +192,8 @@ merge or split.
 
 `domain/sim/solver.ts` turns a Circuit into a `SimResult`: every net's
 level and drive strength, each part's observable state, and warnings. It is
-static and combinational. There is no time yet; propagation delay and the
-tick loop arrive with gate logic in Phase 3 (D-016).
+static: given what each chip output is driving right now, it solves one
+instant. Time and gate delay live in the engine around it (§4b).
 
 | Level     | Meaning                                                            |
 | --------- | ------------------------------------------------------------------ |
@@ -200,9 +203,11 @@ tick loop arrive with gate logic in Phase 3 (D-016).
 
 1. Start from the static netlist and join nets through **closed switch
    contacts** (SPST position 1; SPDT `com`–`a` at 0, `com`–`b` at 1).
-2. **Strong drivers** are supply leads (+5 V → 1, ground → 0), and chip
-   outputs from Phase 3. Two different strong levels on one net give `X`
-   plus a `SHORT` warning.
+2. **Strong drivers** are supply leads (+5 V → 1, ground → 0) and chip
+   outputs (whatever level the engine says each output is driving; an
+   unpowered chip's outputs drive nothing). Strong 1 against strong 0 on
+   one net gives `X` plus a `SHORT` warning naming every driver. A strong
+   `X` (a gate with a floating input) makes the net `X` with no warning.
 3. **Resistors pass a weak copy** of a strong level to undriven nets.
    Undriven nets joined by resistors form a group, and the group takes the
    strong levels it touches through resistors: one level gives that level
@@ -218,10 +223,52 @@ tick loop arrive with gate logic in Phase 3 (D-016).
 Pin roles (`input`, `output`, `power`, `ground`, `passive`) are data on
 each `PinFootprint`, so chips declare what must not float (D-020).
 
-The sim worker re-solves after every successful edit and pushes a
-`circuit` message, then a `frame` (the `SimResult` plus a revision
-number), then the response. A caller awaiting `apply` has therefore
-already seen the new circuit and frame.
+## 4b. Chips and time
+
+**Chips are data.** `domain/chips/gate.ts` has the gate functions (`AND`,
+`OR`, `NAND`, `NOR`, `XOR`, `NOT`) and one builder, `gateChip`, that turns
+a 14-pin pinout table and a gate function into a `PartDef`. The builder
+supplies the footprint, pin roles, datasheet pin names (`1A`, `1Y`, …) and
+`logic: ChipLogic` (gates, VCC/GND pins, `delayTicks`).
+`domain/chips/catalog.ts` lists the 74HC00 (NAND), 74HC02 (NOR), 74HC04
+(NOT) and 74HC08 (AND). Adding a chip is one `gateChip(...)` call. Gate
+functions handle unknowns: a controlling input decides (`NAND(0, Z) = 1`);
+otherwise a floating or `X` input gives `X`.
+
+**Time is ticks.** `domain/sim/engine.ts` wraps the solver in a fixed-step
+`Simulation`: **1 tick = 1 ms (1 kHz)**. Each chip output has a current
+level and at most one pending change. Stepping from tick t to t+1:
+
+1. Apply output changes scheduled for t+1.
+2. Re-solve with the new outputs (only if something changed).
+3. Evaluate every gate on the solved levels. If a gate's value differs from
+   its output, schedule the change at t+1+`delayTicks`. If it matches,
+   cancel any pending change (**inertial delay**: a pulse shorter than the
+   delay never reaches the output).
+
+An edit (`load`) re-solves and schedules **without advancing time**, so an
+input change shows at once but its effect on any output waits at least one
+tick. A signal through n gates takes n ticks. Every 74HC chip has
+`delayTicks = 1`: the real ~8 ns is far below one tick, and one tick is the
+smallest delay the 1 kHz sim can show (D-021).
+
+**Who moves time.** `SimService` never reads a clock itself:
+
+- `step` / `run` requests (the bridge's `board.step` / `board.run`) advance
+  an exact number of ticks, with the bridge's caps (100 000 ticks, 10 000
+  ms; `run` rounds ms up to whole ticks).
+- `serveSim(port, service, clock)` installs a real-time loop: every ~4 ms
+  of wall time it runs the ticks owed (one per elapsed ms, at most 250 at a
+  time, so a backgrounded tab does not replay minutes). A `clock` request
+  starts or pauses it. The worker passes the real clock; tests pass none
+  (or a fake), so they stay deterministic (D-023).
+
+**What the UI sees.** After every edit or step the worker pushes `circuit`
+(if it changed), then a `frame` (the `SimResult` plus `revision`, `time`,
+`settled`, `running`), then the response. A caller awaiting `apply` or
+`step` has therefore already seen the new circuit and frame. While the
+real-time clock runs, a frame goes out only when an output changes. When
+nothing changes, a small `time` message goes out about 10 times a second.
 
 ## 5. Board geometry
 

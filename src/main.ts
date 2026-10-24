@@ -1,6 +1,7 @@
 import { BoardRenderer } from './ui/canvas/board-renderer';
 import { Editor, type Tool } from './ui/editor/editor';
 import { WorkerCircuitHost } from './ui/worker-circuit-host';
+import { HALF_ADDER } from './domain/demos/half-adder';
 import type { PortLike } from './protocol/sim-protocol';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#board')!;
@@ -8,11 +9,15 @@ const status = document.querySelector<HTMLDivElement>('#status')!;
 const hoverLine = document.querySelector<HTMLDivElement>('#hover')!;
 const warningList = document.querySelector<HTMLUListElement>('#warnings')!;
 const palette = document.querySelector<HTMLDivElement>('#palette')!;
+const runToggle = document.querySelector<HTMLButtonElement>('#run-toggle')!;
+const stepButton = document.querySelector<HTMLButtonElement>('#step-1')!;
+const clock = document.querySelector<HTMLSpanElement>('#clock')!;
 const size = new URLSearchParams(location.search).get('size') === 'full' ? 'full' : 'half';
 
 const worker = new Worker(new URL('./worker/sim.worker.ts', import.meta.url), { type: 'module' });
 const host = new WorkerCircuitHost(worker as unknown as PortLike, { size, preset: 'bench' });
 await host.ready;
+await host.setRunning(true);
 
 let pointer: { x: number; y: number } | null = null;
 let renderer: BoardRenderer | null = null;
@@ -31,6 +36,12 @@ const editor = new Editor(host, () => {
       pointer,
     });
     status.textContent = editor.message;
+    const f = editor.frame;
+    if (f) {
+      clock.textContent = `t = ${f.time.ms} ms`;
+      runToggle.textContent = f.running ? 'Pause' : 'Run';
+      stepButton.disabled = f.running;
+    }
     hoverLine.textContent = editor.hoverInfo();
     const warnings = editor.frame?.warnings ?? [];
     const text = warnings.map((w) => `${w.code}: ${w.message}`).join('\n');
@@ -65,6 +76,25 @@ palette.addEventListener('click', (e) => {
     b.setAttribute('aria-pressed', String(b === button));
   }
   editor.setTool(tool);
+});
+
+runToggle.addEventListener('click', () => void host.setRunning(!(editor.frame?.running ?? true)));
+stepButton.addEventListener('click', () => void host.step(1));
+document.querySelector('#clear-board')!.addEventListener('click', () => {
+  void host.reset({ size, preset: 'bench' }).then(() => host.setRunning(true));
+});
+document.querySelector('#load-demo')!.addEventListener('click', async () => {
+  await host.reset({ size, preset: 'bench' });
+  for (const cmd of HALF_ADDER.commands) {
+    const r = await host.apply(cmd);
+    if (!r.ok) {
+      editor.say(`Demo failed at ${cmd.op}: ${r.error.message}`);
+      return;
+    }
+  }
+  await host.setRunning(true);
+  palette.querySelector<HTMLButtonElement>('[data-tool="select"]')!.click();
+  editor.say(`${HALF_ADDER.title}: click SW1 (A) and SW2 (B). D1 = sum, D2 = carry.`);
 });
 
 const hit = (e: PointerEvent | MouseEvent) => renderer!.hitTest(e.clientX, e.clientY);

@@ -125,7 +125,7 @@ Worker. The interim `LocalCircuitHost` from D-010 is deleted. The editor
 still runs `applyCommand` on its read-only mirror of the circuit to colour
 the ghost preview. That is validation, not simulation.
 
-## D-016 — Stage-1 is static; no tick loop yet (Accepted, Phase 2)
+## D-016 — Stage-1 is static; no tick loop yet (Superseded by D-021, D-023)
 
 Switches, supplies, resistors and LEDs have no dynamics, so Phase 2
 re-solves the whole circuit after every edit (cheap: well under a
@@ -164,3 +164,46 @@ Select tool, clicking a switch's body or pin flips it.
 `PinFootprint` gained optional `role` and datasheet `name`. The 74HC00's
 inputs, outputs and supply pins are declared now (one shared quad-2-input
 pinout table) so floating-input and unpowered-chip warnings work in Phase 2. Its outputs drive nothing until Phase 3 gives it logic.
+
+## D-021 — 1 tick = 1 ms; every 74HC gate has a 1-tick inertial delay (Accepted, Phase 3)
+
+The brief fixed the tick at 1 kHz. Real 74HC propagation delay (~8 ns) is
+far below a tick, so each gate gets `delayTicks = 1`, the smallest
+observable delay. A signal through n gates takes n ticks, which makes delay
+visible and testable (see the half-adder timeline in
+`tests/acceptance/phase3.test.ts`). The delay is **inertial**: a change
+cancelled before it lands is dropped, so a sub-tick input pulse never
+reaches an output, much like real CMOS. `delayTicks` is per chip, so
+slower parts (or a 74LS family) can differ later.
+
+## D-022 — Half adder on one 74HC00: the carry LED sinks into NAND(A, B) (Accepted, Phase 3)
+
+A driven half adder needs five NANDs (four for XOR, one more to invert
+the carry). The brief asked for one 74HC00, which has four. The XOR's first
+gate already computes n1 = NAND(A, B) = NOT carry, so the carry LED is
+wired as a current sink: +5 V → R4 → D2 → n1. It lights exactly when
+n1 = 0, i.e. A = B = 1. This is ordinary practice with real 74HC outputs.
+The SPST switches leave inputs floating when open, so each gets a
+pull-down resistor. The circuit uses only default footprints, so it can be
+built by hand from the palette. `src/domain/demos/half-adder.ts` is the
+single definition, used by the browser's demo button and the acceptance
+test.
+
+## D-023 — Real-time loop lives at the edge; tests never see wall time (Accepted, Phase 3)
+
+`SimService.advance(elapsedMs)` owes one tick per elapsed ms and is called
+from a ~4 ms `setInterval` that `serveSim` installs only when given a
+`Clock`. Catch-up is capped at 250 ticks per call, so a throttled or
+backgrounded tab loses time rather than freezing to replay it. The clock
+starts paused, and the editor starts it after connecting. Pausing plus
+**Step 1 ms** makes gate delay visible in the browser. Scripts (Phase 4.5)
+will pause the clock and drive time only with `board.run`/`board.step`, so
+their results do not depend on wall time.
+
+## D-024 — 74HC02, 74HC04 and 74HC08 ship with the builder (Accepted, Phase 3)
+
+The original phase plan listed the 7400 first, then the 7402/7404/7408
+from the same builder. With `gateChip`, each is one line plus its pinout
+table (the 7402's outputs come first on each side; the 7404 has six
+inverters), and each has a truth-table test on the board. All four chips
+are in the palette.

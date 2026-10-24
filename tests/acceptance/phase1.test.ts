@@ -92,6 +92,9 @@ describe('parts registry', () => {
       'switch-spst',
       'switch-spdt',
       'chip74hc00',
+      'chip74hc02',
+      'chip74hc04',
+      'chip74hc08',
     ]);
   });
 

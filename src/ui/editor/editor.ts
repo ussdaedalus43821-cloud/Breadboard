@@ -104,6 +104,12 @@ export class Editor {
     this.onChange();
   }
 
+  /** Show a status message. */
+  say(message: string): void {
+    this.message = message;
+    this.onChange();
+  }
+
   pointerMove(t: BoardTerminal | null): void {
     this.hover = t;
     this.onChange();

@@ -20,7 +20,8 @@
         gap: 6px;
         margin-bottom: 12px;
       }
-      #palette button {
+      #palette button,
+      #sim-controls button {
         font: inherit;
         padding: 6px 12px;
         border: 1px solid #4a4d55;
@@ -33,6 +34,18 @@
         background: #ff9f1c;
         border-color: #ff9f1c;
         color: #1b1b1b;
+      }
+      #sim-controls {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 12px;
+      }
+      #clock {
+        font-family: ui-monospace, monospace;
+        min-width: 11ch;
+        padding: 0 6px;
       }
       #board {
         display: block;
@@ -77,6 +90,22 @@
         <button type="button" data-tool="part" data-type="chip74hc00" aria-pressed="false">
           74HC00
         </button>
+        <button type="button" data-tool="part" data-type="chip74hc02" aria-pressed="false">
+          74HC02
+        </button>
+        <button type="button" data-tool="part" data-type="chip74hc04" aria-pressed="false">
+          74HC04
+        </button>
+        <button type="button" data-tool="part" data-type="chip74hc08" aria-pressed="false">
+          74HC08
+        </button>
+      </div>
+      <div id="sim-controls" role="toolbar" aria-label="Simulation">
+        <button type="button" id="run-toggle">Pause</button>
+        <button type="button" id="step-1">Step 1 ms</button>
+        <span id="clock">t = 0 ms</span>
+        <button type="button" id="load-demo">Load half-adder demo</button>
+        <button type="button" id="clear-board">Clear board</button>
       </div>
       <canvas id="board"></canvas>
       <div id="status"></div>
