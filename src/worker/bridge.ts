@@ -11,6 +11,7 @@ import {
   BRIDGE_OPS,
   BRIDGE_VERSION,
   BRIDGE_VERSIONS_ACCEPTED,
+  OP_SINCE,
   MAX_PARTS,
   MAX_WIRES,
   type BridgeErrorCode,
@@ -130,8 +131,9 @@ export function handleBridge(service: SimService, raw: unknown): BridgeOutcome {
     if (typeof op !== 'string' || !BRIDGE_OPS.includes(op)) {
       throw new Refusal('BAD_ARGS', `unknown op ${JSON.stringify(op)}`);
     }
-    if (op === 'board.resistor' && v < 2) {
-      throw new Refusal('BAD_ARGS', 'board.resistor needs bridge contract v2');
+    const since = OP_SINCE[op];
+    if (since !== undefined && v < since) {
+      throw new Refusal('BAD_ARGS', `${op} needs bridge contract v${since}`);
     }
     const args = Array.isArray(req.args) ? (req.args as unknown[]) : [];
     const result = dispatch(op, args);
@@ -187,6 +189,30 @@ export function handleBridge(service: SimService, raw: unknown): BridgeOutcome {
         }
         const pins = { '1': str(op, 'from', args[1]), '2': str(op, 'to', args[2]) };
         return handle(part(command({ op: 'placeLeads', type, pins })));
+      }
+      case 'board.display': {
+        arity(op, args, 1);
+        placing();
+        const d = part(command({ op: 'place', type: 'display-7seg', at: str(op, 'at', args[0]) }));
+        const segments: Record<string, string> = {};
+        for (const [seg, n] of Object.entries(getPartDef(d.type).segments ?? {})) {
+          segments[seg] = terminalKey({ kind: 'pin', part: d.id, pin: n });
+        }
+        return { ...handle(d), segments };
+      }
+      case 'board.clock': {
+        arity(op, args, 1, 2);
+        const hz = args.length === 2 ? num(op, 'hz', args[1]) : 100;
+        const period = 1000 / hz;
+        if (!Number.isInteger(period) || period % 2 !== 0 || period < 2 || period > 10_000) {
+          throw new Refusal(
+            'BAD_ARGS',
+            `board.clock: hz must give a period of an even whole number of 1 ms ticks, 2 to 10000 (500 Hz down to 0.1 Hz: 1, 10, 100, 250 … work, 3 does not), got ${hz}`,
+          );
+        }
+        const cid = command({ op: 'clock', at: str(op, 'at', args[0]), periodTicks: period });
+        const lead = service.state.circuit.supplies.find((x) => x.id === cid)!;
+        return { id: lead.id, at: terminalKey(lead.at), hz, periodTicks: period };
       }
       case 'board.chip': {
         arity(op, args, 2);

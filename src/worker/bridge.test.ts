@@ -28,7 +28,7 @@ describe('bridge dispatcher', () => {
   it.each([
     ['an unknown op', { v: 2, id: 1, op: 'eval', args: ['1+1'] }],
     ['a raw op', { v: 2, id: 1, op: 'command', args: [] }],
-    ['an unsupported version', { v: 3, id: 1, op: 'sim.time', args: [] }],
+    ['an unsupported version', { v: 4, id: 1, op: 'sim.time', args: [] }],
     [
       'board.resistor on a v1 request',
       { v: 1, id: 1, op: 'board.resistor', args: [330, 'hole:a1', 'hole:a5'] },

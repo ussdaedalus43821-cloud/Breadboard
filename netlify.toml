@@ -1,0 +1,22 @@
+# Netlify: build the static site and serve it cross-origin isolated.
+# Pyodide (the NovaLang worker) needs SharedArrayBuffer, which browsers only
+# enable when the page sends both headers below (see docs/DECISIONS.md D-047).
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cross-Origin-Opener-Policy = "same-origin"
+    Cross-Origin-Embedder-Policy = "require-corp"
+
+# Pyodide's .wasm and .zip are large and content-addressed by version.
+[[headers]]
+  for = "/pyodide/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

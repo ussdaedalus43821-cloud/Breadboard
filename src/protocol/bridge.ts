@@ -1,8 +1,18 @@
 // The NovaLang bridge wire format: docs/NOVALANG_BRIDGE.md §5. Plain JSON.
 
-/** Contract version. v2 added board.resistor (D-031); v1 requests are still accepted. */
-export const BRIDGE_VERSION = 2;
-export const BRIDGE_VERSIONS_ACCEPTED: readonly number[] = [1, 2];
+/**
+ * Contract version. v2 added board.resistor (D-031); v3 added board.display
+ * and board.clock (D-045). Older requests are still accepted.
+ */
+export const BRIDGE_VERSION = 3;
+export const BRIDGE_VERSIONS_ACCEPTED: readonly number[] = [1, 2, 3];
+
+/** The contract version that introduced each op added after v1. */
+export const OP_SINCE: Readonly<Record<string, number>> = {
+  'board.resistor': 2,
+  'board.display': 3,
+  'board.clock': 3,
+};
 
 /** Every op a script can reach. Nothing else is dispatched (no eval, no raw). */
 export const BRIDGE_COMMANDS = [
@@ -17,6 +27,8 @@ export const BRIDGE_COMMANDS = [
   'board.run',
   'board.step',
   'board.resistor',
+  'board.display',
+  'board.clock',
 ] as const;
 export const BRIDGE_QUERIES = ['sim.get', 'sim.snapshot', 'sim.time'] as const;
 export const BRIDGE_OPS: readonly string[] = [...BRIDGE_COMMANDS, ...BRIDGE_QUERIES];

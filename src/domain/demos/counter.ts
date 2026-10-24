@@ -160,3 +160,28 @@ function decadeCounterDemo(): Demo {
 
 export const FLIP_FLOP: Demo = flipFlopDemo();
 export const DECADE_COUNTER: Demo = decadeCounterDemo();
+
+/**
+ * The same decade counter clocked by a 1 Hz CLK lead instead of the switch:
+ * it counts by itself. Select the lead and pick another frequency to speed it
+ * up (D-046).
+ */
+function clockedCounterDemo(): Demo {
+  const manual = DECADE_COUNTER.commands;
+  const isClockSwitch = (c: Command): boolean =>
+    (c.op === 'place' && c.type === 'switch-spst') ||
+    (c.op === 'wire' && c.from === 'hole:b45') ||
+    (c.op === 'placeLeads' && c.type === 'resistor-10k');
+  return {
+    title: 'Decade counter clocked at 1 Hz',
+    size: 'full',
+    inputs: { CLK: 'CLK1' },
+    outputs: { display: 'DS1' },
+    commands: [
+      ...manual.filter((c) => !isClockSwitch(c)),
+      { op: 'clock', at: 'hole:a47', periodTicks: 1000 }, // row 47 feeds U1's CLK (wire d47)
+    ],
+  };
+}
+
+export const DECADE_COUNTER_CLOCKED: Demo = clockedCounterDemo();

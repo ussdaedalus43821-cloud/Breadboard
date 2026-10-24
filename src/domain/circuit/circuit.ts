@@ -34,7 +34,7 @@ export interface Supply {
 }
 
 /** Clock-lead periods the UI offers, in ticks (1 tick = 1 ms). */
-export const CLOCK_PERIODS: readonly number[] = [2, 10, 20, 100, 1000];
+export const CLOCK_PERIODS: readonly number[] = [2, 4, 10, 20, 40, 100, 200, 500, 1000];
 export const DEFAULT_CLOCK_PERIOD = 10;
 
 /** A clock lead's level at tick `t`: high for the first half of each period. */

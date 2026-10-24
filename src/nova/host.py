@@ -30,7 +30,7 @@ from novalang import Nova, NovaLangError  # noqa: E402
 
 sys.setrecursionlimit(_SAFE_RECURSION_LIMIT)
 
-BRIDGE_VERSION = 2
+BRIDGE_VERSION = 3
 MAX_BRIDGE_CALLS = 100_000
 
 
@@ -65,6 +65,7 @@ class _Bridge:
 
 BOARD_CALLS = (
     "new", "switch", "led", "chip", "wire", "power", "ground", "set", "run", "step", "resistor",
+    "display", "clock",
 )
 SIM_CALLS = ("get", "snapshot", "time")
 
