@@ -98,15 +98,19 @@ describe('acceptance: 5 V rail → switch → resistor → LED → ground', () =
   it('the LED is dark with the switch open and lights when it is closed', async () => {
     const b = await bench();
     await b.apply(...cmds);
-    expect(b.frame().parts['D1']).toEqual({ lit: false });
+    expect(b.frame().parts['D1']).toMatchObject({ lit: false });
 
     await b.apply({ op: 'set', id: 'SW1', value: 1 });
-    expect(b.frame().parts['D1']).toEqual({ lit: true });
+    expect(b.frame().parts['D1']).toMatchObject({ lit: true });
     const anode = b.frame().nets.find((n) => n.terminals.includes('pin:D1:anode'))!;
-    expect(anode).toMatchObject({ level: 1, strength: 'weak' });
+    // Stage 2: the anode sits one LED drop above ground (~2.1 V), which a 74HC
+    // input would read as X. It is reached through a resistor, so it is weak.
+    expect(anode).toMatchObject({ level: 'X', strength: 'weak' });
+    expect(anode.volts).toBeCloseTo(2.14, 1);
+    expect(b.frame().parts['D1']!.milliamps).toBeCloseTo(8.7, 0);
 
     await b.apply({ op: 'set', id: 'SW1', value: 0 });
-    expect(b.frame().parts['D1']).toEqual({ lit: false });
+    expect(b.frame().parts['D1']).toMatchObject({ lit: false });
     expect(b.frame().warnings).toEqual([]);
   });
 
@@ -130,17 +134,17 @@ describe('acceptance: 5 V rail → switch → resistor → LED → ground', () =
     await click({ kind: 'part', type: 'resistor' }, 'd5');
     await click({ kind: 'part', type: 'led-red' }, 'c9');
     await drag(hole('a', 10), { kind: 'rail', rail: 'bottom-', index: 2 });
-    expect(editor.frame!.parts['D1']).toEqual({ lit: false });
+    expect(editor.frame!.parts['D1']).toMatchObject({ lit: false });
 
     editor.setTool({ kind: 'select' });
     await editor.pointerDown(null, { x: 3, y: 13 }); // the switch body between b3 and b5
     expect(editor.message).toBe('SW1 closed.');
-    expect(editor.frame!.parts['D1']).toEqual({ lit: true });
-    expect(editor.levelOf(terminalKey(hole('e', 9)))).toBe(1);
+    expect(editor.frame!.parts['D1']).toMatchObject({ lit: true });
+    expect(editor.levelOf(terminalKey(hole('e', 5)))).toBe(1); // the switched side of R1
 
     await editor.pointerDown(hole('b', 5)); // clicking a switch pin also toggles it
     expect(editor.message).toBe('SW1 open.');
-    expect(editor.frame!.parts['D1']).toEqual({ lit: false });
+    expect(editor.frame!.parts['D1']).toMatchObject({ lit: false });
   });
 });
 

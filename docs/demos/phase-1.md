@@ -16,7 +16,7 @@ npm run dev          # http://localhost:5173/
 2. Hover the chip tool over `e12`. The ghost turns red with red pin dots,
    and clicking reports `OCCUPIED: hole:e12 already holds pin:U1:3`.
 3. Click **LED**, then `a20` (anode `a20`, cathode `a21`). Click
-   **Resistor**, then `c22` (leads `c22`–`c26`).
+   **330 Ω**, then `c22` (leads `c22`–`c26`).
 4. Click **Wire**. Drag from `j10` to the top red rail: the green wire
    joins pin 14's strip to `+`. Drag from `a21` (the LED's cathode) to
    `c22` (the resistor's pin 1). Both drags start on pins, so the wire

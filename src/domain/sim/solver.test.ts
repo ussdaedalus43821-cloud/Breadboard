@@ -70,20 +70,22 @@ describe('Stage-1 solver', () => {
     expect(levelOf(r, hole('e9'))).toBe('X');
   });
 
-  it('an LED lights only forward-biased, and never drives its nets', () => {
+  it('an LED lights only forward-biased, and never makes a floating net driven', () => {
     const forward = build(benchCircuit(), {
       op: 'placeLeads',
       type: 'led-red',
       pins: { anode: 'rail:top+:3', cathode: 'rail:top-:3' },
     });
-    expect(solve(forward).parts['D1']).toEqual({ lit: true });
+    // Straight across the rails: lit, but far over its rating (the engine burns it out).
+    expect(solve(forward).parts['D1']).toMatchObject({ lit: true, burnt: false });
+    expect(solve(forward).warnings.map((w) => w.code)).toEqual(['OVERCURRENT']);
 
     const reverse = build(benchCircuit(), {
       op: 'placeLeads',
       type: 'led-red',
       pins: { anode: 'rail:top-:3', cathode: 'rail:top+:3' },
     });
-    expect(solve(reverse).parts['D1']).toEqual({ lit: false });
+    expect(solve(reverse).parts['D1']).toMatchObject({ lit: false, milliamps: 0 });
 
     const halfConnected = build(benchCircuit(), {
       op: 'placeLeads',
@@ -91,7 +93,7 @@ describe('Stage-1 solver', () => {
       pins: { anode: 'rail:top+:3', cathode: 'hole:a9' },
     });
     const r = solve(halfConnected);
-    expect(r.parts['D1']).toEqual({ lit: false });
+    expect(r.parts['D1']).toMatchObject({ lit: false });
     expect(levelOf(r, hole('a9'))).toBe('Z');
   });
 

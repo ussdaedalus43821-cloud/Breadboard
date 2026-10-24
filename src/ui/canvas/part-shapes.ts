@@ -31,8 +31,44 @@ export interface DrawStyle {
   readonly warn?: ReadonlySet<string>;
   /** LED: lit. */
   readonly lit?: boolean;
+  /** LED: glow, 0…1 of its rated current. */
+  readonly brightness?: number;
+  /** LED: destroyed by over-current. */
+  readonly burnt?: boolean;
   /** Switch: position (SPST 1 = closed; SPDT 0 = com–a, 1 = com–b). */
   readonly position?: number;
+}
+
+const BAND_COLORS = [
+  '#1b1b1b', // 0 black
+  '#7c4a1e', // 1 brown
+  '#d6332e', // 2 red
+  '#f08c00', // 3 orange
+  '#f5d90a', // 4 yellow
+  '#2f9e44', // 5 green
+  '#1c7ed6', // 6 blue
+  '#7048e8', // 7 violet
+  '#868e96', // 8 grey
+  '#f8f9fa', // 9 white
+];
+
+/** The three value bands of a 4-band resistor: 330 → orange orange brown, 10 k → brown black orange. */
+export function resistorBands(ohms: number): [string, string, string] {
+  let sig = ohms;
+  let exp = 0;
+  while (sig >= 100) {
+    sig /= 10;
+    exp++;
+  }
+  const d = Math.round(sig);
+  return [BAND_COLORS[Math.floor(d / 10)]!, BAND_COLORS[d % 10]!, BAND_COLORS[exp]!];
+}
+
+/** Linear blend of two #rrggbb colours. */
+function mix(from: string, to: string, t: number): string {
+  const c = (hex: string, i: number) => parseInt(hex.slice(1 + 2 * i, 3 + 2 * i), 16);
+  const ch = [0, 1, 2].map((i) => Math.round(c(from, i) + (c(to, i) - c(from, i)) * t));
+  return `rgb(${ch[0]}, ${ch[1]}, ${ch[2]})`;
 }
 
 function px(spec: BoardSpec, layout: BoardLayout, t: BoardTerminal): Point {
@@ -157,26 +193,52 @@ export function drawPart(
       const a = at('anode');
       const k = at('cathode');
       const mid = { x: (a.x + k.x) / 2, y: (a.y + k.y) / 2 - pitch * 0.6 };
+      const r = pitch * 0.55;
       lead(ctx, a, mid, 2);
       lead(ctx, k, mid, 2);
-      if (style.lit) {
-        ctx.shadowColor = '#ff2d2d';
-        ctx.shadowBlur = pitch * 1.4;
+      if (style.burnt) {
+        // Burnt: dark, cracked, no glow.
+        ctx.beginPath();
+        ctx.arc(mid.x, mid.y, r, 0, Math.PI * 2);
+        ctx.fillStyle = '#3d3a3a';
+        ctx.fill();
+        ctx.strokeStyle = '#1f1d1d';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.strokeStyle = '#c9c2b8';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(mid.x - r * 0.55, mid.y - r * 0.45);
+        ctx.lineTo(mid.x - r * 0.05, mid.y + r * 0.05);
+        ctx.lineTo(mid.x + r * 0.1, mid.y - r * 0.3);
+        ctx.lineTo(mid.x + r * 0.55, mid.y + r * 0.5);
+        ctx.stroke();
+        break;
+      }
+      // Glow scales with current: a dim LED barely haloes, one at its rating blazes.
+      const glow = style.lit ? 0.35 + 0.65 * (style.brightness ?? 1) : 0;
+      if (glow > 0) {
+        ctx.shadowColor = `rgba(255, 45, 45, ${glow})`;
+        ctx.shadowBlur = pitch * 1.6 * glow;
       }
       ctx.beginPath();
-      ctx.arc(mid.x, mid.y, pitch * 0.55, 0, Math.PI * 2);
-      ctx.fillStyle = style.lit ? '#ff4d4f' : style.ghost ? '#e5484d' : '#8a2f33';
+      ctx.arc(mid.x, mid.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = style.lit
+        ? mix('#8a2f33', '#ff4d4f', glow)
+        : style.ghost
+          ? '#e5484d'
+          : '#8a2f33';
       ctx.fill();
       ctx.shadowBlur = 0;
-      if (style.lit) {
-        ctx.beginPath();
-        ctx.arc(mid.x - pitch * 0.17, mid.y - pitch * 0.17, pitch * 0.16, 0, Math.PI * 2);
-        ctx.fillStyle = '#ffe3e3';
-        ctx.fill();
-      }
       ctx.strokeStyle = '#8f1d22';
       ctx.lineWidth = 1.5;
       ctx.stroke();
+      if (style.lit) {
+        ctx.beginPath();
+        ctx.arc(mid.x - pitch * 0.17, mid.y - pitch * 0.17, pitch * 0.16, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255, 227, 227, ${glow})`;
+        ctx.fill();
+      }
       break;
     }
     case 'resistor': {
@@ -196,8 +258,8 @@ export function drawPart(
       ctx.roundRect(-bodyLen / 2, -bodyH / 2, bodyLen, bodyH, bodyH / 3);
       ctx.fill();
       ctx.stroke();
-      // 330 Ω: orange, orange, brown, gold.
-      ['#f08c00', '#f08c00', '#7c4a1e', '#c9a227'].forEach((color, i) => {
+      // Colour code from the value: digit, digit, multiplier, gold tolerance.
+      [...resistorBands(Number(def.props['ohms'])), '#c9a227'].forEach((color, i) => {
         ctx.fillStyle = color;
         const x = -bodyLen / 2 + bodyLen * (0.2 + i * (i === 3 ? 0.2 : 0.16));
         ctx.fillRect(x, -bodyH / 2, bodyLen * 0.07, bodyH);

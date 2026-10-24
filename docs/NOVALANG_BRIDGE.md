@@ -76,8 +76,10 @@ like the real thing; a second lead in the same hole is `OCCUPIED`.
 
 Levels: `0` and `1` are driven logic levels. `"Z"` means floating (nothing
 drives the net; a floating chip input also raises a warning). `"X"` means
-contention or unknown (two drivers disagree). `volts` is `null` until
-Stage-2 electrical (Phase 4).
+contention or unknown (between the 74HC thresholds of 1.5 V and 3.5 V).
+`volts` is the net's node voltage, or `null` for a floating net. Part
+`state` also carries electrical readings: LEDs report `lit`,
+`brightness` (0…1), `milliamps` and `burnt`; resistors report `milliamps`.
 
 ## 4. Errors
 

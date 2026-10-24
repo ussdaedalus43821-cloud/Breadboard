@@ -36,8 +36,9 @@ src/
     circuit/         circuit.ts (Circuit, supplies, occupancy, circuitNetlist,
                      benchCircuit), commands.ts (the edit dispatcher: place,
                      placeLeads, wire, power, ground, set, remove)
-    sim/             solver.ts: Stage-1 logic solver (§4a); engine.ts: ticks
-                     and propagation delay (§4b); Stage-2 electrical (Phase 4)
+    sim/             solver.ts: Stage-2 electrical solver (§4a); electrical.ts
+                     (constants); mna.ts (linear solve); engine.ts: ticks,
+                     propagation delay, LED burn-out (§4b)
     chips/           gate.ts (gate functions, ChipLogic, dipFootprint, the
                      gateChip builder), catalog.ts (74HC00/02/04/08)
     demos/           demo circuits as command lists (half-adder.ts)
@@ -188,37 +189,57 @@ sorted by key. Its result round-trips: for every `t` in `resolveNet(r)`,
 smallest key in it, so ids are deterministic and change only when nets
 merge or split.
 
-## 4a. Stage-1 logic solver
+## 4a. The electrical solver (Stage 2)
 
-`domain/sim/solver.ts` turns a Circuit into a `SimResult`: every net's
-level and drive strength, each part's observable state, and warnings. It is
-static: given what each chip output is driving right now, it solves one
-instant. Time and gate delay live in the engine around it (§4b).
+`domain/sim/solver.ts` turns a Circuit, plus what each chip output is
+driving, into a `SimResult` for one instant. That result holds every net's
+**voltage**, logic level and drive strength, each part's observable state
+(LED current, brightness and burn-out; resistor current; switch position),
+and warnings. Time and gate delay live in the engine around it (§4b).
+Stage 1 (Phase 2) propagated logic levels only. Stage 2 (Phase 4) computes
+voltages and currents, and reads levels from them (D-025).
 
-| Level     | Meaning                                                            |
-| --------- | ------------------------------------------------------------------ |
-| `1` / `0` | Driven high / low                                                  |
-| `Z`       | Floating: nothing drives the net                                   |
-| `X`       | Conflict: strong 1 and 0 on one net (short), or a resistor divider |
+1. **Topology.** Start from the static netlist and join nets through
+   closed switch contacts (SPST position 1; SPDT `com`–`a` at 0, `com`–`b`
+   at 1). Switches and wires are ideal conductors.
+2. **Elements** (constants in `domain/sim/electrical.ts`):
+   - **Drivers** are voltage sources behind a series resistance. A
+     bench-supply lead is 5 V or 0 V behind 0.1 Ω. A 74HC output is 5 V
+     (1), 0 V (0) or 2.5 V (`X`, a gate with a floating input) behind
+     50 Ω. An unpowered chip's outputs drive nothing.
+   - **Resistors** are conductances, valued from `props.ohms` (100 Ω,
+     330 Ω, 1 kΩ, 10 kΩ in the registry).
+   - **LEDs** are piecewise-linear diodes: off (1 nS leakage), or on as
+     `forwardVolts` (2.0 V) plus `seriesOhms` (15 Ω). A burnt LED is open.
+   - Chip inputs and supply pins draw no current.
+3. **Nodal analysis** (`domain/sim/mna.ts`) over the nets that touch an
+   element, with a 1 pS `gmin` to 0 V on every node so the matrix is never
+   singular. LED on/off states are iterated until they agree with the
+   voltages (at most 50 rounds; a few in practice).
+4. **Strength** is topological: `strong` if a driver is on the net, `weak`
+   if a resistor path reaches one, `none` otherwise. **Level** comes from
+   the voltage with 74HC thresholds at 5 V: ≥ 3.5 V reads 1, ≤ 1.5 V reads
+   0, between reads `X`. A `none` net is `Z` (its `volts` is `null`),
+   whatever leakage says. A net an `X` output drives is `X` (D-026).
 
-1. Start from the static netlist and join nets through **closed switch
-   contacts** (SPST position 1; SPDT `com`–`a` at 0, `com`–`b` at 1).
-2. **Strong drivers** are supply leads (+5 V → 1, ground → 0) and chip
-   outputs (whatever level the engine says each output is driving; an
-   unpowered chip's outputs drive nothing). Strong 1 against strong 0 on
-   one net gives `X` plus a `SHORT` warning naming every driver. A strong
-   `X` (a gate with a floating input) makes the net `X` with no warning.
-3. **Resistors pass a weak copy** of a strong level to undriven nets.
-   Undriven nets joined by resistors form a group, and the group takes the
-   strong levels it touches through resistors: one level gives that level
-   (weak), both give `X`, none gives `Z`. Real voltages come with Stage 2
-   (Phase 4) (D-017).
-4. **LEDs are loads** and never drive either net. An LED is lit when its
-   anode is 1 and its cathode is 0, at any strength.
-5. **Warnings:** `FLOATING_INPUT` for a chip `input` pin on a `Z` net;
-   `CHIP_UNPOWERED` for a `power` pin not at 1 or a `ground` pin not at 0;
-   `SHORT`. Each names the TerminalRef keys involved, and the renderer rings
-   those pins in yellow.
+| Level     | Meaning                                                                                   |
+| --------- | ----------------------------------------------------------------------------------------- |
+| `1` / `0` | Driven, at or beyond V_IH / V_IL                                                          |
+| `Z`       | Floating: no driver, no resistor path to one                                              |
+| `X`       | Between thresholds (a fight, a divider, an LED anode at ~2 V), or driven by an `X` output |
+
+5. **Warnings.** Each names the TerminalRef keys involved, and the renderer
+   rings those pins in yellow.
+
+| Code              | When                                                                                                                           |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `FLOATING_INPUT`  | A chip `input` pin is on a `Z` net                                                                                             |
+| `CHIP_UNPOWERED`  | A chip `power` pin is not at 1, or a `ground` pin is not at 0                                                                  |
+| `SHORT`           | A bench-supply lead exceeds the 1 A current limit                                                                              |
+| `CONTENTION`      | A 74HC output exceeds its 25 mA absolute maximum while another driver on the same net drives the opposite level (D-028)        |
+| `OUTPUT_OVERLOAD` | A 74HC output exceeds 25 mA with no opposing driver on its net (e.g. into 100 Ω to ground)                                     |
+| `OVERCURRENT`     | An LED carries more than its rated `maxMilliamps` (20 mA) but is still alive                                                   |
+| `LED_BURNT`       | An LED was driven past `burnMilliamps` (40 mA): "current limit exceeded". It stays an open circuit until it is removed (D-027) |
 
 Pin roles (`input`, `output`, `power`, `ground`, `passive`) are data on
 each `PinFootprint`, so chips declare what must not float (D-020).
@@ -262,6 +283,13 @@ smallest delay the 1 kHz sim can show (D-021).
   time, so a backgrounded tab does not replay minutes). A `clock` request
   starts or pauses it. The worker passes the real clock; tests pass none
   (or a fake), so they stay deterministic (D-023).
+
+**Burn-out is engine state.** After every solve the engine checks each
+LED against `burnMilliamps`. Any LED over it is recorded as burnt (with
+the current that killed it) and the circuit is solved again with that LED
+open, until nothing more burns. Burning is instant: it does not wait for a
+tick. The record is dropped only when the LED's part is removed, so fixing
+the circuit afterwards does not revive it, just as on a real bench.
 
 **What the UI sees.** After every edit or step the worker pushes `circuit`
 (if it changed), then a `frame` (the `SimResult` plus `revision`, `time`,

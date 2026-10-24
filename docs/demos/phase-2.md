@@ -18,7 +18,7 @@ The board starts with `+5V` and `GND` leads on the left end of every rail.
 
 1. **SPST switch** → click `b3` (pins `b3`, `b5`).
 2. **Wire** → drag from the top red rail's 2nd hole to `a3`.
-3. **Resistor** → click `d5` (leads `d5`–`d9`).
+3. **330 Ω** → click `d5` (leads `d5`–`d9`).
 4. **LED** → click `c9` (anode `c9`, cathode `c10`).
 5. **Wire** → drag from `a10` to the bottom blue rail's 2nd hole.
 6. **Select** → click the switch. The knob slides right and turns green,

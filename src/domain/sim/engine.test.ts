@@ -119,7 +119,7 @@ describe('Simulation', () => {
     expect(sim.outputLevel('pin:U1:2')).toBe('Z');
   });
 
-  it('two outputs fighting raise SHORT naming both pins', () => {
+  it('two outputs fighting raise CONTENTION naming both pins', () => {
     // 1Y (pin 2) driven low (1A high), 2Y (pin 4) driven high (2A low), joined.
     const c = build(powered('chip74hc04'), tie('1', HIGH(3)), tie('3', LOW(3)), {
       op: 'wire',
@@ -128,8 +128,8 @@ describe('Simulation', () => {
     });
     const sim = new Simulation(c);
     sim.step();
-    const short = sim.result.warnings.find((w) => w.code === 'SHORT');
+    const short = sim.result.warnings.find((w) => w.code === 'CONTENTION');
     expect(short?.at).toEqual(['pin:U1:2', 'pin:U1:4']);
-    expect(short?.message).toMatch(/high against low/);
+    expect(short?.message).toMatch(/drives low.*drives high/);
   });
 });

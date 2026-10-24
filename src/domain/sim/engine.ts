@@ -14,7 +14,7 @@ import { pin, terminalKey, type TerminalKey } from '../breadboard/terminal';
 import type { Circuit } from '../circuit/circuit';
 import { getPartDef } from '../parts/registry';
 import type { Level } from './levels';
-import { solve, type SimResult } from './solver';
+import { overdrivenLeds, solve, type SimResult } from './solver';
 
 export const TICK_MS = 1;
 
@@ -34,11 +34,13 @@ export class Simulation {
   /** What each chip output pin drives now. Absent = Z (not yet driving). */
   private outputs = new Map<TerminalKey, Level>();
   private pending = new Map<TerminalKey, Pending>();
+  /** LEDs destroyed by over-current (part id → mA that killed them). Cleared only by removing the LED. */
+  private burnt = new Map<string, number>();
   private solved: SimResult;
 
   constructor(circuit: Circuit) {
     this.circuit = circuit;
-    this.solved = solve(circuit, this.outputs);
+    this.solved = this.solveNow();
     this.schedule();
   }
 
@@ -70,7 +72,9 @@ export class Simulation {
     for (const map of [this.outputs, this.pending] as Map<TerminalKey, unknown>[]) {
       for (const key of map.keys()) if (!live.has(key)) map.delete(key);
     }
-    this.solved = solve(circuit, this.outputs);
+    const parts = new Set(circuit.parts.map((p) => p.id));
+    for (const id of this.burnt.keys()) if (!parts.has(id)) this.burnt.delete(id);
+    this.solved = this.solveNow();
     this.schedule();
   }
 
@@ -92,11 +96,29 @@ export class Simulation {
       this.ticks = now;
       if (applied) {
         changed = true;
-        this.solved = solve(this.circuit, this.outputs);
+        this.solved = this.solveNow();
         this.schedule();
       }
     }
     return changed;
+  }
+
+  /** IDs of LEDs that have burned out. */
+  get burntLeds(): ReadonlySet<string> {
+    return new Set(this.burnt.keys());
+  }
+
+  /**
+   * Solve, then burn out any LED driven past its limit and solve again with it
+   * open, until no more burn. Burning is instant: it does not wait for a tick.
+   */
+  private solveNow(): SimResult {
+    for (;;) {
+      const result = solve(this.circuit, this.outputs, this.burnt);
+      const killed = overdrivenLeds(this.circuit, result);
+      if (killed.size === 0) return result;
+      for (const [id, milliamps] of killed) this.burnt.set(id, milliamps);
+    }
   }
 
   /** Step until nothing is pending, at most `limit` ticks. Returns ticks taken. */

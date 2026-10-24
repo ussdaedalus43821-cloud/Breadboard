@@ -11,7 +11,7 @@ import {
 import { COLUMNS, pin, terminalKey } from '../../domain/breadboard/terminal';
 import type { Circuit } from '../../domain/circuit/circuit';
 import type { SimFrame } from '../../protocol/sim-protocol';
-import { getPartDef } from '../../domain/parts/registry';
+import { formatOhms, getPartDef } from '../../domain/parts/registry';
 import type { Level } from '../../domain/sim/solver';
 import type { Preview } from '../editor/editor';
 import { createBoardLayout, type BoardLayout } from './board-layout';
@@ -141,10 +141,15 @@ export class BoardRenderer {
       for (const part of circuit.parts) {
         const state = frame?.parts[part.id] ?? {};
         const pinKey = (name: string): string => terminalKey(pin(part.id, name));
-        drawPart(ctx, spec, layout, getPartDef(part.type), part.pins, part.id, {
+        const def = getPartDef(part.type);
+        const label =
+          def.kind === 'resistor' ? `${part.id} ${formatOhms(Number(def.props['ohms']))}` : part.id;
+        drawPart(ctx, spec, layout, def, part.pins, label, {
           levelOf: (name) => levels.get(pinKey(name)),
           warn: new Set(Object.keys(part.pins).filter((name) => warned.has(pinKey(name)))),
           ...(state.lit === undefined ? {} : { lit: state.lit }),
+          ...(state.brightness === undefined ? {} : { brightness: state.brightness }),
+          ...(state.burnt === undefined ? {} : { burnt: state.burnt }),
           ...(state.position === undefined ? {} : { position: state.position }),
         });
       }

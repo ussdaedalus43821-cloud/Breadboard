@@ -3,6 +3,28 @@
 import { CHIPS } from '../chips/catalog';
 import type { PartDef } from './types';
 
+/** Format a resistance the way it is printed: 330 Ω, 1 kΩ, 10 kΩ. */
+export function formatOhms(ohms: number): string {
+  return ohms >= 1000 ? `${ohms / 1000} kΩ` : `${ohms} Ω`;
+}
+
+/** A 1/4 W axial resistor lying flat, 0.4" lead spacing. 330 Ω keeps the plain `resistor` type. */
+function resistor(ohms: number): PartDef {
+  const suffix = ohms >= 1000 ? `${ohms / 1000}k` : String(ohms);
+  return {
+    type: ohms === 330 ? 'resistor' : `resistor-${suffix}`,
+    kind: 'resistor',
+    label: `Resistor ${formatOhms(ohms)}`,
+    idPrefix: 'R',
+    pins: [
+      { pin: '1', dx: 0, dy: 0 },
+      { pin: '2', dx: 4, dy: 0 },
+    ],
+    leads: 'flexible',
+    props: { ohms },
+  };
+}
+
 const DEFS: readonly PartDef[] = [
   {
     type: 'led-red',
@@ -14,21 +36,11 @@ const DEFS: readonly PartDef[] = [
       { pin: 'cathode', dx: 1, dy: 0 },
     ],
     leads: 'flexible',
-    props: { color: 'red', forwardVolts: 2.0, maxMilliamps: 20 },
+    // Typical 5 mm red LED: 2.0 V forward, ~15 Ω once conducting, 20 mA rated.
+    // Past burnMilliamps it is destroyed (an open circuit until replaced).
+    props: { color: 'red', forwardVolts: 2.0, seriesOhms: 15, maxMilliamps: 20, burnMilliamps: 40 },
   },
-  {
-    type: 'resistor',
-    kind: 'resistor',
-    label: 'Resistor 330 Ω',
-    idPrefix: 'R',
-    // 0.4" lead spacing, the usual for a 1/4 W resistor lying flat.
-    pins: [
-      { pin: '1', dx: 0, dy: 0 },
-      { pin: '2', dx: 4, dy: 0 },
-    ],
-    leads: 'flexible',
-    props: { ohms: 330 },
-  },
+  ...[330, 100, 1000, 10_000].map(resistor),
   {
     type: 'switch-spst',
     kind: 'switch',

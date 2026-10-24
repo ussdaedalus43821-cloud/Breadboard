@@ -42,7 +42,7 @@ export class Editor {
   private dragFrom: BoardTerminal | null = null;
   private circuit: Circuit | null = null;
   private latest: SimFrame | null = null;
-  private levels = new Map<TerminalKey, { net: string; level: Level }>();
+  private levels = new Map<TerminalKey, { net: string; level: Level; volts: number | null }>();
 
   constructor(
     private readonly host: CircuitHost,
@@ -56,7 +56,9 @@ export class Editor {
       this.latest = f;
       this.levels = new Map();
       for (const net of f.nets) {
-        for (const key of net.terminals) this.levels.set(key, { net: net.id, level: net.level });
+        for (const key of net.terminals) {
+          this.levels.set(key, { net: net.id, level: net.level, volts: net.volts });
+        }
       }
       this.onChange();
     });
@@ -87,7 +89,17 @@ export class Editor {
         ? ` · ${terminalKey(pin(who.part, who.pin))}`
         : ` · ${occupantId(who)}`;
     const lv = this.levels.get(key);
-    return lv ? `${key}${what} · ${lv.net} · level ${lv.level}` : `${key}${what}`;
+    if (!lv) return `${key}${what}`;
+    const volts = lv.volts === null ? '' : ` · ${lv.volts.toFixed(2)} V`;
+    const partId = who?.kind === 'pin' ? who.part : undefined;
+    const part = partId === undefined ? undefined : this.latest?.parts[partId];
+    const current =
+      part?.burnt === true
+        ? ` · ${partId} burnt out`
+        : part?.milliamps !== undefined
+          ? ` · ${partId} ${Math.abs(part.milliamps).toFixed(1)} mA`
+          : '';
+    return `${key}${what} · ${lv.net} · level ${lv.level}${volts}${current}`;
   }
 
   setTool(tool: Tool): void {

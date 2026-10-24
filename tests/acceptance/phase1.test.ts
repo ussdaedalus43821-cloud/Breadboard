@@ -89,6 +89,9 @@ describe('parts registry', () => {
     expect(partTypes()).toEqual([
       'led-red',
       'resistor',
+      'resistor-100',
+      'resistor-1k',
+      'resistor-10k',
       'switch-spst',
       'switch-spdt',
       'chip74hc00',

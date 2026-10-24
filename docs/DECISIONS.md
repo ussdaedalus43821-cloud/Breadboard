@@ -133,7 +133,7 @@ millisecond at this size). A tick loop and sim time are added with gate
 propagation delay in Phase 3, which is also when `board.run`/`board.step`
 start to mean something. Frames carry a `revision`, not a time.
 
-## D-017 — Resistors pass weak levels; LEDs are loads; dividers are X (Accepted, Phase 2)
+## D-017 — Resistors pass weak levels; LEDs are loads; dividers are X (Superseded by D-025, D-026)
 
 Stage 1 has no voltages, but "switch → resistor → LED" must light, and a
 pull-up must count as a driven input. Resistors therefore copy a strong
@@ -207,3 +207,58 @@ from the same builder. With `gateChip`, each is one line plus its pinout
 table (the 7402's outputs come first on each side; the 7404 has six
 inverters), and each has a truth-table test on the board. All four chips
 are in the palette.
+
+## D-025 — Stage 2 is DC nodal analysis with Thevenin drivers and piecewise-linear LEDs (Accepted, Phase 4)
+
+Every driver is a voltage source behind a resistance: the bench supply is
+5 V / 0.1 Ω, and a 74HC output is 0 or 5 V / 50 Ω (roughly the typical HC
+output at 5 V). Resistors are conductances. LEDs are off, or 2.0 V + 15 Ω.
+The solver builds the nodal matrix over the nets that touch an element,
+solves it densely (circuits have tens of nodes), and iterates LED states
+until consistent. Limits, contention, burn-out and LED brightness all fall
+out of the same currents rather than being special cases. Deliberately
+left out: capacitance, transient behaviour, chip supply current, input
+protection diodes, and supply sag. Tick-level logic timing stays as in
+D-021.
+
+## D-026 — Levels are read from voltages with 74HC thresholds (Accepted, Phase 4)
+
+V ≥ 3.5 V reads 1, ≤ 1.5 V reads 0, between reads X. Strength stays
+topological (strong, weak, none), and `none` is always Z, so floating
+detection is unchanged. This is a visible semantic change from Stage 1:
+an LED's anode sits one forward drop above its cathode (~2.1 V), so it now
+reads X where Stage 1 said weak 1. The Phase 2 tests were updated to say
+so. Dividers are no longer always X (10 k over 1 k reads 0). Equal
+dividers still sit at 2.5 V and read X.
+
+## D-027 — LED burn-out is permanent until the LED is replaced (Accepted, Phase 4)
+
+Each LED has `maxMilliamps` (20, the continuous rating) and
+`burnMilliamps` (40). Between the two it lights at full brightness with an
+`OVERCURRENT` warning. Past `burnMilliamps` the engine marks it burnt and
+it becomes an open circuit, with a persistent `LED_BURNT` warning ("current
+limit exceeded", with the current that killed it). Adding the missing
+resistor afterwards does not revive it. Removing the part does, because
+the replacement is a new part with a new id. This is sim state, not user
+state, so it is not saved (ARCHITECTURE §6) and a fresh board starts with
+every LED healthy.
+
+## D-028 — Contention means an output over 25 mA against an opposing driver (Accepted, Phase 4)
+
+25 mA is the 74HC absolute maximum output current. Two opposing outputs
+joined directly draw 50 mA through each other (2 × 50 Ω across 5 V) and
+raise `CONTENTION`. The same pair through 330 Ω draws 11.6 mA, which is
+within limits, so there is no warning. Outputs fighting a supply rail are
+contention too. An output over the limit with no opposing driver on its
+net (e.g. into 100 Ω to ground) is `OUTPUT_OVERLOAD` instead. An `X`
+output never raises either, since its 2.5 V source is a stand-in, not a
+real drive.
+
+## D-029 — Resistor values are part types (Accepted, Phase 4)
+
+`resistor` (330 Ω, unchanged for existing tests and saves),
+`resistor-100`, `resistor-1k` and `resistor-10k`. Each is drawn with its
+real colour code, computed from `props.ohms`, and labelled with its value.
+An editable value belongs to the Phase 5 inspector. When it arrives it can
+become part `state` without changing the solver, which already reads
+`props.ohms` per part.
