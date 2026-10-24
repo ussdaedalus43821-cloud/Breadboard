@@ -2,3 +2,5 @@ node_modules
 dist
 coverage
 *.log
+dist-itch
+breadboard-itch.zip

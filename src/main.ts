@@ -180,7 +180,9 @@ document
   );
 
 // NovaLang scripting: the nova worker starts the first time the panel opens.
-const base = import.meta.env.BASE_URL;
+// Absolute, so the nova worker (served from assets/) resolves it the same way
+// whether the site lives at / or in a subfolder (the relative itch.io build).
+const base = new URL(import.meta.env.BASE_URL, document.baseURI).href;
 const nova = new NovaClient(
   () => new Worker(new URL('./nova/worker.ts', import.meta.url), { type: 'module' }),
   (port, message) => worker.postMessage(message, [port]),
