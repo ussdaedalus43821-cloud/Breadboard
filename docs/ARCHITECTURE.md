@@ -508,3 +508,15 @@ the bridge needs `SharedArrayBuffer` (D-026, D-047). `netlify.toml` and
 `vercel.json` at the repo root set the build command, the output
 directory and the headers. `npm run preview` serves `dist/` with the same
 headers, for a local check.
+
+### itch.io
+
+itch.io serves an HTML game from a subfolder of its own CDN, inside an
+iframe, so the build must use relative paths: `npm run build:itch` builds
+with `--base=./` into `dist-itch/` and zips it as `breadboard-itch.zip`
+(about 6.5 MB, 20 files). Upload it as an HTML project. In the embed
+options, tick **SharedArrayBuffer support**: that makes itch send
+COOP/COEP, without which the NovaLang panel says scripting is unavailable
+(the simulator still works). Saves live in the iframe origin's
+localStorage, and **Export to URL** links point at the bare game page on
+itch's CDN, not the itch.io page.
