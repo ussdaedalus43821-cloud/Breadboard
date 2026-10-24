@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Breadboard</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        background: #2b2d31;
+        color: #e8e8e8;
+      }
+      main {
+        padding: 16px;
+      }
+      #status {
+        margin-top: 8px;
+        font-family: ui-monospace, monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <canvas id="board"></canvas>
+      <div id="status">Click a hole.</div>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
