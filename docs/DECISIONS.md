@@ -286,7 +286,10 @@ Every v1 call is unchanged, and v1 requests are still accepted (minus
 commands, drop `board.resistor` and give `board.led` a built-in series
 resistor instead. In the same spirit, `board.led` and `board.resistor`
 accept `pin:` refs the way `board.wire` does (D-011), and leads aimed at
-one strip get distinct holes. `board.chip` takes `"7400"` or `"74HC00"`
+one strip get distinct holes. This is done in the bridge layer
+(`src/worker/bridge.ts`), because Phase 4.5 leaves `domain/` untouched.
+Known gap, left in domain/ for Phase 5: `board.wire` with both ends as
+`pin:` refs in the same strip picks the same hole twice and is refused. `board.chip` takes `"7400"` or `"74HC00"`
 (every chip is the 74HC part).
 
 ## D-032 — Scripts get no Python objects and no `python.*` (Accepted, Phase 4.5)

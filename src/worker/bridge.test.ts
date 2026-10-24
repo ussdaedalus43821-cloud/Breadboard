@@ -98,6 +98,17 @@ describe('bridge dispatcher', () => {
     expect(call(s, 'sim.get', 'U1')).toMatchObject({ error: { code: 'UNKNOWN_PART' } });
   });
 
+  it('pin: leads for led/resistor land in distinct free holes joined to the pin', () => {
+    const s = new SimService();
+    call(s, 'board.new', 'half');
+    call(s, 'board.led', 'hole:a10', 'hole:a11'); // D1
+    const r = call(s, 'board.resistor', 330, 'pin:D1:anode', 'pin:D1:anode');
+    expect(r).toMatchObject({ ok: true, result: { holes: { '1': 'hole:b10', '2': 'hole:c10' } } });
+    expect(call(s, 'board.led', 'pin:D9:anode', 'hole:a1')).toMatchObject({
+      error: { code: 'BAD_TERMINAL' },
+    });
+  });
+
   it('collects the circuit and frame pushes the UI should see', () => {
     const s = new SimService();
     const { pushes } = handleBridge(s, { v: 2, id: 1, op: 'board.new', args: ['half'] });

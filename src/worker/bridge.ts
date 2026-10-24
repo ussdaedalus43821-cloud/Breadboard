@@ -2,8 +2,9 @@
 // then turned into the same SimService requests the UI sends, so scripts and
 // the editor share one validation path. Results are plain JSON.
 
-import { isOnBoard } from '../domain/breadboard/spec';
+import { boardConnections, isOnBoard, terminalPosition } from '../domain/breadboard/spec';
 import { parseTerminal, terminalKey, TerminalRefError } from '../domain/breadboard/terminal';
+import { occupancy } from '../domain/circuit/circuit';
 import type { Command } from '../domain/circuit/commands';
 import { getPartDef, hasPartDef } from '../domain/parts/registry';
 import type { PlacedPart } from '../domain/parts/types';
@@ -114,6 +115,42 @@ export function handleBridge(service: SimService, raw: unknown): BridgeOutcome {
   };
   const command = (cmd: Command): string => send({ kind: 'command', cmd }).id ?? '';
   const part = (pid: string): PlacedPart => service.state.circuit.parts.find((p) => p.id === pid)!;
+  /**
+   * Flexible leads given as `pin:` refs land in the nearest free hole the board
+   * joins to that pin's hole, as `board.wire` ends do (D-011), each lead in its
+   * own hole. Done here, not in domain/, which Phase 4.5 does not change. Keys
+   * that are not pins, or pins that do not exist, pass through for the
+   * dispatcher to judge.
+   */
+  const leadHoles = (keys: readonly string[]): string[] => {
+    const { circuit } = service.state;
+    const taken = new Set(occupancy(circuit).keys());
+    return keys.map((key) => {
+      if (!key.startsWith('pin:')) return key;
+      let ref;
+      try {
+        ref = parseTerminal(key);
+      } catch {
+        return key;
+      }
+      if (ref.kind !== 'pin') return key;
+      const at = circuit.parts.find((p) => p.id === ref.part)?.pins[ref.pin];
+      if (!at) return key;
+      const atKey = terminalKey(at);
+      const group =
+        boardConnections(circuit.spec).find((g) => g.some((m) => terminalKey(m) === atKey)) ?? [];
+      const origin = terminalPosition(circuit.spec, at);
+      const dist = (k: string): number => {
+        const q = terminalPosition(circuit.spec, parseTerminal(k));
+        return Math.hypot(q.x - origin.x, q.y - origin.y);
+      };
+      const free = group.map(terminalKey).filter((k) => !taken.has(k));
+      free.sort((a, b) => dist(a) - dist(b));
+      if (!free[0]) throw new Refusal('OCCUPIED', `no free hole left joined to ${key}`);
+      taken.add(free[0]);
+      return free[0];
+    });
+  };
   const placing = (): void => {
     if (service.state.circuit.parts.length >= MAX_PARTS) {
       throw new Refusal('LIMIT', `a board holds at most ${MAX_PARTS} parts`);
@@ -179,7 +216,11 @@ export function handleBridge(service: SimService, raw: unknown): BridgeOutcome {
       case 'board.led': {
         arity(op, args, 2);
         placing();
-        const pins = { anode: str(op, 'anode', args[0]), cathode: str(op, 'cathode', args[1]) };
+        const [anode, cathode] = leadHoles([
+          str(op, 'anode', args[0]),
+          str(op, 'cathode', args[1]),
+        ]);
+        const pins = { anode: anode!, cathode: cathode! };
         return handle(part(command({ op: 'placeLeads', type: 'led-red', pins })));
       }
       case 'board.resistor': {
@@ -193,7 +234,8 @@ export function handleBridge(service: SimService, raw: unknown): BridgeOutcome {
             `board.resistor: ohms must be one of ${Object.keys(RESISTORS).join(', ')}, got ${ohms}`,
           );
         }
-        const pins = { '1': str(op, 'from', args[1]), '2': str(op, 'to', args[2]) };
+        const [from, to] = leadHoles([str(op, 'from', args[1]), str(op, 'to', args[2])]);
+        const pins = { '1': from!, '2': to! };
         return handle(part(command({ op: 'placeLeads', type, pins })));
       }
       case 'board.chip': {
