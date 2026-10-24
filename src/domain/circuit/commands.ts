@@ -10,6 +10,7 @@ import {
 } from '../breadboard/spec';
 import {
   parseTerminal,
+  pin,
   terminalKey,
   TerminalRefError,
   type TerminalKey,
@@ -18,7 +19,7 @@ import {
 import { footprintAt } from '../parts/footprint';
 import { getPartDef, hasPartDef } from '../parts/registry';
 import type { PlacedPart } from '../parts/types';
-import { findPart, occupancy, type Circuit } from './circuit';
+import { findPart, occupancy, type Circuit, type Supply } from './circuit';
 
 export type Command =
   /** Place a part's default footprint with its anchor pin at `at`. */
@@ -29,9 +30,15 @@ export type Command =
       readonly type: string;
       readonly pins: Readonly<Record<string, TerminalKey>>;
     }
-  /** Add a jumper wire. A `pin:` end is normalized to the hole that pin sits in. */
+  /** Add a jumper wire. A `pin:` end goes into the nearest free hole joined to that pin (D-011). */
   | { readonly op: 'wire'; readonly from: TerminalKey; readonly to: TerminalKey }
-  /** Remove a part or a wire by id. */
+  /** Plug a +5 V bench-supply lead into `at` (normally a rail hole). */
+  | { readonly op: 'power'; readonly at: TerminalKey }
+  /** Plug a ground lead into `at`. */
+  | { readonly op: 'ground'; readonly at: TerminalKey }
+  /** Set a part's user state. v1: switches only, value 0 or 1 (`position`). */
+  | { readonly op: 'set'; readonly id: string; readonly value: number }
+  /** Remove a part, wire or supply by id. */
   | { readonly op: 'remove'; readonly id: string };
 
 /** Error codes shared with docs/NOVALANG_BRIDGE.md §4. */
@@ -92,7 +99,12 @@ function assertFree(circuit: Circuit, terminals: readonly BoardTerminal[]): void
     seen.add(key);
     const who = occupied.get(key);
     if (who) {
-      const what = who.kind === 'pin' ? `pin:${who.part}:${who.pin}` : `wire ${who.wire}`;
+      const what =
+        who.kind === 'pin'
+          ? terminalKey(pin(who.part, who.pin))
+          : who.kind === 'wire'
+            ? `wire ${who.wire}`
+            : `supply ${who.supply}`;
       throw new Rejection('OCCUPIED', `${key} already holds ${what}`);
     }
   }
@@ -161,6 +173,41 @@ function dispatch(circuit: Circuit, cmd: Command): CommandResult {
       const wire = { id, from: ends[0], to: ends[1] };
       return { ok: true, id, circuit: { ...circuit, wires: [...circuit.wires, wire], nextId } };
     }
+    case 'power':
+    case 'ground': {
+      const at = boardTerminal(circuit, cmd.at);
+      if (cmd.at.startsWith('pin:')) {
+        throw new Rejection('BAD_TERMINAL', `a supply lead goes in a hole, got ${cmd.at}`);
+      }
+      assertFree(circuit, [at]);
+      const { id, nextId } = allocateId(circuit, cmd.op === 'power' ? 'VCC' : 'GND');
+      const supply: Supply = { id, kind: cmd.op, at, volts: cmd.op === 'power' ? 5 : 0 };
+      return {
+        ok: true,
+        id,
+        circuit: { ...circuit, supplies: [...circuit.supplies, supply], nextId },
+      };
+    }
+    case 'set': {
+      const part = findPart(circuit, cmd.id);
+      if (!part) throw new Rejection('UNKNOWN_PART', `no part ${JSON.stringify(cmd.id)}`);
+      const def = getPartDef(part.type);
+      if (def.kind !== 'switch') {
+        throw new Rejection('BAD_ARGS', `${part.id} (${def.label}) has no settable state`);
+      }
+      if (cmd.value !== 0 && cmd.value !== 1) {
+        throw new Rejection(
+          'BAD_ARGS',
+          `switch position must be 0 or 1, got ${JSON.stringify(cmd.value)}`,
+        );
+      }
+      const updated: PlacedPart = { ...part, state: { ...part.state, position: cmd.value } };
+      return {
+        ok: true,
+        id: part.id,
+        circuit: { ...circuit, parts: circuit.parts.map((p) => (p.id === part.id ? updated : p)) },
+      };
+    }
     case 'remove': {
       if (findPart(circuit, cmd.id)) {
         return {
@@ -176,7 +223,14 @@ function dispatch(circuit: Circuit, cmd: Command): CommandResult {
           circuit: { ...circuit, wires: circuit.wires.filter((w) => w.id !== cmd.id) },
         };
       }
-      throw new Rejection('UNKNOWN_PART', `no part or wire ${JSON.stringify(cmd.id)}`);
+      if (circuit.supplies.some((x) => x.id === cmd.id)) {
+        return {
+          ok: true,
+          id: cmd.id,
+          circuit: { ...circuit, supplies: circuit.supplies.filter((x) => x.id !== cmd.id) },
+        };
+      }
+      throw new Rejection('UNKNOWN_PART', `no part, wire or supply ${JSON.stringify(cmd.id)}`);
     }
     default:
       throw new Rejection('BAD_ARGS', `unknown op ${JSON.stringify((cmd as { op?: unknown }).op)}`);

@@ -33,17 +33,22 @@ src/
                      netlist.ts (union-find, resolveNet)
     parts/           types.ts (PartDef, PlacedPart, PinFootprint), registry.ts,
                      footprint.ts (where a part's pins land)
-    circuit/         circuit.ts (Circuit, occupancy, circuitNetlist),
-                     commands.ts (the edit dispatcher: place, placeLeads, wire, remove)
-    sim/             (Phase 2+) logic solver, tick loop; Stage-2 electrical (Phase 4)
+    circuit/         circuit.ts (Circuit, supplies, occupancy, circuitNetlist,
+                     benchCircuit), commands.ts (the edit dispatcher: place,
+                     placeLeads, wire, power, ground, set, remove)
+    sim/             solver.ts: Stage-1 logic solver (§4a); Stage-2 electrical (Phase 4)
     chips/           (Phase 3)  74xx chips as data, gate.ts builder
-  protocol/        JSON message types between main thread and workers;
+  protocol/        JSON message types between main thread and workers:
+                     sim-protocol.ts (requests, responses, circuit/frame pushes),
                      circuit-host.ts (the UI's one door into the Circuit)
-  worker/          (Phase 2+) sim.worker.ts hosts domain/; nova.worker.ts (Phase 4.5)
+  worker/          sim-service.ts (owns the Circuit, answers requests, solves),
+                     sim.worker.ts (entry point: serves SimService on the worker
+                     global); nova.worker.ts (Phase 4.5)
   ui/              everything that touches the DOM or a canvas
     canvas/          board-renderer.ts, board-layout.ts, part-shapes.ts
-    editor/          editor.ts: palette tool, click-to-place, drag-to-wire (no DOM)
-    local-circuit-host.ts  interim main-thread CircuitHost (Phase 1 only, D-010)
+    editor/          editor.ts: palette tool, click-to-place, drag-to-wire,
+                     click-to-toggle switches (no DOM)
+    worker-circuit-host.ts  CircuitHost over the sim-worker protocol
     panels/          inspector, scripting panel (later phases); the Phase 1
                      palette is plain HTML in index.html
   main.ts          entry point: wires the UI to the workers
@@ -65,6 +70,8 @@ Rules:
    `document`, `localStorage` and similar inside `domain/`. A Vitest test
    (`tests/acceptance/phase0.test.ts`) lints a deliberately bad import and
    checks that the rule fires, so the guard cannot quietly stop working.
+   The same rule keeps `ui/` from importing `worker/` and `protocol/` from
+   importing either (`tests/acceptance/phase2.test.ts`).
 2. `domain/` is deterministic and synchronous: no timers, no `Math.random`
    without an injected seed, no I/O. That keeps it testable in plain Node
    and lets the same code run in the worker and in tests.
@@ -169,14 +176,52 @@ union-find over terminal keys:
 3. Union the two ends of each wire.
 
 `circuitNetlist(circuit)` does all three. A closed switch is **not** in the
-static netlist: whether a switch conducts is sim state, joined per sim step
-from Phase 2 on.
+static netlist: whether a switch conducts is sim state, joined by the
+solver (§4a).
 
 `resolveNet(ref)` returns every terminal electrically joined to `ref`,
 sorted by key. Its result round-trips: for every `t` in `resolveNet(r)`,
 `resolveNet(t)` returns the same set. A net's id is `net:` plus the
 smallest key in it, so ids are deterministic and change only when nets
 merge or split.
+
+## 4a. Stage-1 logic solver
+
+`domain/sim/solver.ts` turns a Circuit into a `SimResult`: every net's
+level and drive strength, each part's observable state, and warnings. It is
+static and combinational. There is no time yet; propagation delay and the
+tick loop arrive with gate logic in Phase 3 (D-016).
+
+| Level     | Meaning                                                            |
+| --------- | ------------------------------------------------------------------ |
+| `1` / `0` | Driven high / low                                                  |
+| `Z`       | Floating: nothing drives the net                                   |
+| `X`       | Conflict: strong 1 and 0 on one net (short), or a resistor divider |
+
+1. Start from the static netlist and join nets through **closed switch
+   contacts** (SPST position 1; SPDT `com`–`a` at 0, `com`–`b` at 1).
+2. **Strong drivers** are supply leads (+5 V → 1, ground → 0), and chip
+   outputs from Phase 3. Two different strong levels on one net give `X`
+   plus a `SHORT` warning.
+3. **Resistors pass a weak copy** of a strong level to undriven nets.
+   Undriven nets joined by resistors form a group, and the group takes the
+   strong levels it touches through resistors: one level gives that level
+   (weak), both give `X`, none gives `Z`. Real voltages come with Stage 2
+   (Phase 4) (D-017).
+4. **LEDs are loads** and never drive either net. An LED is lit when its
+   anode is 1 and its cathode is 0, at any strength.
+5. **Warnings:** `FLOATING_INPUT` for a chip `input` pin on a `Z` net;
+   `CHIP_UNPOWERED` for a `power` pin not at 1 or a `ground` pin not at 0;
+   `SHORT`. Each names the TerminalRef keys involved, and the renderer rings
+   those pins in yellow.
+
+Pin roles (`input`, `output`, `power`, `ground`, `passive`) are data on
+each `PinFootprint`, so chips declare what must not float (D-020).
+
+The sim worker re-solves after every successful edit and pushes a
+`circuit` message, then a `frame` (the `SimResult` plus a revision
+number), then the response. A caller awaiting `apply` has therefore
+already seen the new circuit and frame.
 
 ## 5. Board geometry
 

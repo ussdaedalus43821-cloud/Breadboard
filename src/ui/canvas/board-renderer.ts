@@ -8,16 +8,20 @@ import {
   type BoardSpec,
   type BoardTerminal,
 } from '../../domain/breadboard/spec';
-import { COLUMNS } from '../../domain/breadboard/terminal';
+import { COLUMNS, pin, terminalKey } from '../../domain/breadboard/terminal';
 import type { Circuit } from '../../domain/circuit/circuit';
+import type { SimFrame } from '../../protocol/sim-protocol';
 import { getPartDef } from '../../domain/parts/registry';
+import type { Level } from '../../domain/sim/solver';
 import type { Preview } from '../editor/editor';
 import { createBoardLayout, type BoardLayout } from './board-layout';
-import { drawPart, drawWire } from './part-shapes';
+import { drawPart, drawSupply, drawWire } from './part-shapes';
 
 /** Everything one frame shows. */
 export interface Scene {
   readonly circuit?: Circuit;
+  /** Latest sim frame: levels, LED states, warnings. */
+  readonly frame?: SimFrame | null;
   readonly preview?: Preview;
   /** Hole under the pointer, outlined. */
   readonly hover?: BoardTerminal | null;
@@ -129,12 +133,27 @@ export class BoardRenderer {
       ctx.fillRect(p.x - s / 2, p.y - s / 2, s, s);
     }
 
-    const { circuit, preview, hover, pointer } = scene;
+    const { circuit, frame, preview, hover, pointer } = scene;
     if (circuit) {
+      const levels = new Map<string, Level>();
+      for (const net of frame?.nets ?? []) for (const k of net.terminals) levels.set(k, net.level);
+      const warned = new Set((frame?.warnings ?? []).flatMap((w) => w.at));
       for (const part of circuit.parts) {
-        drawPart(ctx, spec, layout, getPartDef(part.type), part.pins, part.id);
+        const state = frame?.parts[part.id] ?? {};
+        const pinKey = (name: string): string => terminalKey(pin(part.id, name));
+        drawPart(ctx, spec, layout, getPartDef(part.type), part.pins, part.id, {
+          levelOf: (name) => levels.get(pinKey(name)),
+          warn: new Set(Object.keys(part.pins).filter((name) => warned.has(pinKey(name)))),
+          ...(state.lit === undefined ? {} : { lit: state.lit }),
+          ...(state.position === undefined ? {} : { position: state.position }),
+        });
       }
-      for (const wire of circuit.wires) drawWire(ctx, spec, layout, wire);
+      for (const wire of circuit.wires) {
+        drawWire(ctx, spec, layout, wire, {
+          levelOf: (end) => levels.get(terminalKey(end === 'from' ? wire.from : wire.to)),
+        });
+      }
+      for (const supply of circuit.supplies) drawSupply(ctx, spec, layout, supply);
     }
 
     if (preview?.kind === 'part' && preview.pins) {

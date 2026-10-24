@@ -3,11 +3,22 @@
 import type { ColumnLetter, TerminalKey } from '../breadboard/terminal';
 import type { BoardTerminal } from '../breadboard/spec';
 
+/**
+ * What a pin does electrically. `input` pins must not float; `output` pins
+ * drive their net (chip logic, Phase 3); `power`/`ground` feed a chip;
+ * `passive` pins belong to two-terminal parts and switches.
+ */
+export type PinRole = 'input' | 'output' | 'power' | 'ground' | 'passive';
+
 /** One pin of a part's default footprint, as a pitch offset from the anchor pin's hole. */
 export interface PinFootprint {
   readonly pin: string;
   readonly dx: number;
   readonly dy: number;
+  /** Defaults to `passive`. */
+  readonly role?: PinRole;
+  /** Datasheet name, e.g. `1A`, `1Y`, `VCC`. */
+  readonly name?: string;
 }
 
 export type PartKind = 'led' | 'resistor' | 'switch' | 'chip';
@@ -42,6 +53,8 @@ export interface PlacedPart {
   readonly id: string;
   readonly type: string;
   readonly pins: Readonly<Record<string, BoardTerminal>>;
+  /** User-set state, e.g. `{ position: 1 }` for a switch. Saved; everything else is derived. */
+  readonly state?: Readonly<Record<string, number>>;
 }
 
 /** JSON form of a PlacedPart: TerminalRefs as canonical keys. */

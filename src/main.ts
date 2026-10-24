@@ -1,17 +1,23 @@
-import { emptyCircuit } from './domain/circuit/circuit';
 import { BoardRenderer } from './ui/canvas/board-renderer';
 import { Editor, type Tool } from './ui/editor/editor';
-import { LocalCircuitHost } from './ui/local-circuit-host';
+import { WorkerCircuitHost } from './ui/worker-circuit-host';
+import type { PortLike } from './protocol/sim-protocol';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#board')!;
 const status = document.querySelector<HTMLDivElement>('#status')!;
+const hoverLine = document.querySelector<HTMLDivElement>('#hover')!;
+const warningList = document.querySelector<HTMLUListElement>('#warnings')!;
 const palette = document.querySelector<HTMLDivElement>('#palette')!;
 const size = new URLSearchParams(location.search).get('size') === 'full' ? 'full' : 'half';
 
-const host = new LocalCircuitHost(emptyCircuit(size));
+const worker = new Worker(new URL('./worker/sim.worker.ts', import.meta.url), { type: 'module' });
+const host = new WorkerCircuitHost(worker as unknown as PortLike, { size, preset: 'bench' });
+await host.ready;
+
 let pointer: { x: number; y: number } | null = null;
 let renderer: BoardRenderer | null = null;
 let frame = 0;
+let shownWarnings = '';
 
 const editor = new Editor(host, () => {
   if (frame) return;
@@ -19,14 +25,29 @@ const editor = new Editor(host, () => {
     frame = 0;
     renderer?.draw({
       circuit: editor.current,
+      frame: editor.frame,
       preview: editor.preview(),
       hover: editor.hover,
       pointer,
     });
     status.textContent = editor.message;
+    hoverLine.textContent = editor.hoverInfo();
+    const warnings = editor.frame?.warnings ?? [];
+    const text = warnings.map((w) => `${w.code}: ${w.message}`).join('\n');
+    if (text !== shownWarnings) {
+      shownWarnings = text;
+      warningList.replaceChildren(
+        ...warnings.map((w) => {
+          const li = document.createElement('li');
+          li.textContent = `${w.code}: ${w.message}`;
+          return li;
+        }),
+      );
+    }
   });
 });
 renderer = new BoardRenderer(canvas, editor.current.spec);
+editor.setTool({ kind: 'select' });
 
 palette.addEventListener('click', (e) => {
   const button = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-tool]');
@@ -37,18 +58,23 @@ palette.addEventListener('click', (e) => {
       ? { kind: 'part', type: button.dataset['type']! }
       : kind === 'wire'
         ? { kind: 'wire' }
-        : { kind: 'select' };
-  for (const b of palette.querySelectorAll('button'))
+        : kind === 'supply'
+          ? { kind: 'supply', supply: button.dataset['supply'] === 'ground' ? 'ground' : 'power' }
+          : { kind: 'select' };
+  for (const b of palette.querySelectorAll('button')) {
     b.setAttribute('aria-pressed', String(b === button));
+  }
   editor.setTool(tool);
 });
 
 const hit = (e: PointerEvent | MouseEvent) => renderer!.hitTest(e.clientX, e.clientY);
+const pitchPoint = (e: PointerEvent | MouseEvent) =>
+  renderer!.layout.toPitch(renderer!.localPoint(e.clientX, e.clientY));
 
 canvas.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;
   canvas.setPointerCapture(e.pointerId);
-  void editor.pointerDown(hit(e));
+  void editor.pointerDown(hit(e), pitchPoint(e));
 });
 canvas.addEventListener('pointermove', (e) => {
   pointer = renderer!.localPoint(e.clientX, e.clientY);
@@ -67,6 +93,7 @@ canvas.addEventListener('contextmenu', (e) => {
   void editor.removeAt(hit(e));
 });
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape')
-    (palette.querySelector('[data-tool="select"]') as HTMLButtonElement).click();
+  if (e.key === 'Escape') {
+    palette.querySelector<HTMLButtonElement>('[data-tool="select"]')!.click();
+  }
 });

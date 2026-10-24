@@ -2,14 +2,24 @@
 // Headline criterion: place two parts, wire them, and the wire resolves to the
 // same net as the two pins.
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { hole, pin, rail, terminalKey } from '../../src/domain/breadboard/terminal';
 import { circuitNetlist, emptyCircuit, type Circuit } from '../../src/domain/circuit/circuit';
 import { applyCommand, type Command } from '../../src/domain/circuit/commands';
 import { getPartDef, partTypes } from '../../src/domain/parts/registry';
 import { PART_ID_PATTERN, PIN_NAME_PATTERN } from '../../src/domain/breadboard/terminal';
 import { Editor } from '../../src/ui/editor/editor';
-import { LocalCircuitHost } from '../../src/ui/local-circuit-host';
+import { connectInProcess, type Connected } from '../support/in-process-host';
+
+const open: Connected[] = [];
+afterEach(() => open.splice(0).forEach((c) => c.close()));
+
+/** Phase 1 semantics: an unpowered, empty board behind the real sim-worker protocol. */
+async function emptyHost() {
+  const c = await connectInProcess({ preset: 'empty' });
+  open.push(c);
+  return c.host;
+}
 
 /** Apply commands in order, failing the test on the first refusal. */
 function build(...cmds: Command[]): Circuit {
@@ -48,7 +58,7 @@ describe('acceptance: two parts wired together share one net', () => {
   });
 
   it('through the editor: palette tool, click a hole, drag a wire', async () => {
-    const host = new LocalCircuitHost();
+    const host = await emptyHost();
     const editor = new Editor(host);
 
     editor.setTool({ kind: 'part', type: 'switch-spst' });
@@ -76,7 +86,13 @@ describe('acceptance: two parts wired together share one net', () => {
 
 describe('parts registry', () => {
   it('has every palette part', () => {
-    expect(partTypes()).toEqual(['led-red', 'resistor', 'switch-spst', 'chip74hc00']);
+    expect(partTypes()).toEqual([
+      'led-red',
+      'resistor',
+      'switch-spst',
+      'switch-spdt',
+      'chip74hc00',
+    ]);
   });
 
   it.each(partTypes())('%s is well-formed', (type) => {
@@ -247,7 +263,7 @@ describe('placement and wiring rules', () => {
 
 describe('editor previews and refusals', () => {
   it('shows a valid ghost over free holes and an invalid one over taken holes', async () => {
-    const editor = new Editor(new LocalCircuitHost());
+    const editor = new Editor(await emptyHost());
     editor.setTool({ kind: 'part', type: 'chip74hc00' });
     editor.pointerMove(hole('e', 10));
     expect(editor.preview()).toMatchObject({ kind: 'part', valid: true });
@@ -260,7 +276,7 @@ describe('editor previews and refusals', () => {
   });
 
   it('a drag released on the start hole or off the board adds nothing', async () => {
-    const editor = new Editor(new LocalCircuitHost());
+    const editor = new Editor(await emptyHost());
     editor.setTool({ kind: 'wire' });
     await editor.pointerDown(hole('a', 1));
     await editor.pointerUp(hole('a', 1));
@@ -270,7 +286,7 @@ describe('editor previews and refusals', () => {
   });
 
   it('right-click removes the part or wire in that hole', async () => {
-    const editor = new Editor(new LocalCircuitHost());
+    const editor = new Editor(await emptyHost());
     editor.setTool({ kind: 'part', type: 'resistor' });
     await editor.pointerDown(hole('a', 1));
     editor.setTool({ kind: 'select' });

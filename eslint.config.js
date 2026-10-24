@@ -28,6 +28,23 @@ export default tseslint.config(
               message:
                 'src/domain/** may only import from src/domain/** (see docs/ARCHITECTURE.md §2).',
             },
+            {
+              target: './src/ui',
+              from: './src/worker',
+              message:
+                'src/ui/** talks to the sim worker only through protocol/ messages (docs/ARCHITECTURE.md §2).',
+            },
+            {
+              target: './src/protocol',
+              from: ['./src/ui', './src/worker'],
+              message:
+                'src/protocol/** may only import from src/domain/** (docs/ARCHITECTURE.md §2).',
+            },
+            {
+              target: './src/worker',
+              from: './src/ui',
+              message: 'src/worker/** must not import src/ui/** (docs/ARCHITECTURE.md §2).',
+            },
           ],
         },
       ],

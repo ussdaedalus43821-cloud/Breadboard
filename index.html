@@ -38,9 +38,21 @@
         display: block;
         touch-action: none;
       }
-      #status {
+      #status,
+      #hover {
         margin-top: 8px;
         font-family: ui-monospace, monospace;
+      }
+      #hover {
+        color: #9aa0a6;
+        min-height: 1.2em;
+      }
+      #warnings {
+        margin: 8px 0 0;
+        padding-left: 20px;
+        color: #fab005;
+        font-family: ui-monospace, monospace;
+        font-size: 13px;
       }
     </style>
   </head>
@@ -56,12 +68,20 @@
           SPST switch
         </button>
         <button type="button" data-tool="wire" aria-pressed="false">Wire</button>
+        <button type="button" data-tool="supply" data-supply="power" aria-pressed="false">
+          +5V lead
+        </button>
+        <button type="button" data-tool="supply" data-supply="ground" aria-pressed="false">
+          GND lead
+        </button>
         <button type="button" data-tool="part" data-type="chip74hc00" aria-pressed="false">
           74HC00
         </button>
       </div>
       <canvas id="board"></canvas>
       <div id="status"></div>
+      <div id="hover"></div>
+      <ul id="warnings" aria-label="Warnings"></ul>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>
