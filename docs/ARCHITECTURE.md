@@ -31,15 +31,21 @@ src/
   domain/          pure TypeScript: geometry, netlist, parts, circuit, sim
     breadboard/      spec.ts (board geometry), terminal.ts (TerminalRef),
                      netlist.ts (union-find, resolveNet)
-    parts/           (Phase 1)  part definitions as data: footprints, pin names
-    circuit/         (Phase 1)  Circuit model: placed parts, wires, supplies
+    parts/           types.ts (PartDef, PlacedPart, PinFootprint), registry.ts,
+                     footprint.ts (where a part's pins land)
+    circuit/         circuit.ts (Circuit, occupancy, circuitNetlist),
+                     commands.ts (the edit dispatcher: place, placeLeads, wire, remove)
     sim/             (Phase 2+) logic solver, tick loop; Stage-2 electrical (Phase 4)
     chips/           (Phase 3)  74xx chips as data, gate.ts builder
-  protocol/        (Phase 1+) JSON message types between main thread and workers
+  protocol/        JSON message types between main thread and workers;
+                     circuit-host.ts (the UI's one door into the Circuit)
   worker/          (Phase 2+) sim.worker.ts hosts domain/; nova.worker.ts (Phase 4.5)
   ui/              everything that touches the DOM or a canvas
-    canvas/          board-renderer.ts and other renderers
-    panels/          palette, inspector, scripting panel (later phases)
+    canvas/          board-renderer.ts, board-layout.ts, part-shapes.ts
+    editor/          editor.ts: palette tool, click-to-place, drag-to-wire (no DOM)
+    local-circuit-host.ts  interim main-thread CircuitHost (Phase 1 only, D-010)
+    panels/          inspector, scripting panel (later phases); the Phase 1
+                     palette is plain HTML in index.html
   main.ts          entry point: wires the UI to the workers
 ```
 
@@ -53,7 +59,7 @@ ui ──► protocol ──► domain
 
 Rules:
 
-1. **`src/domain/**`imports only from`src/domain/**`.** It never imports
+1. **`src/domain/` imports only from `src/domain/`.** It never imports
    `ui/`, `worker/`, `protocol/` or any DOM API. ESLint enforces this with
    `import/no-restricted-paths`. `no-restricted-globals` bans `window`,
    `document`, `localStorage` and similar inside `domain/`. A Vitest test
@@ -144,9 +150,12 @@ Each one has exactly one **canonical string key**, and `terminalKey` and
   pin to the hole it sits in, and that connection is an ordinary netlist
   union.
 - **Wire ends are holes or rail holes.** A wire is a pair of board
-  TerminalRefs. Where a caller names a pin as a wire end (NovaLang does
-  this for convenience), the dispatcher normalizes it to the hole that pin
-  sits in before storing the wire.
+  TerminalRefs, and **each hole holds at most one lead** (a part pin or a
+  wire end). Where a caller names a pin as a wire end (the editor does when
+  a drag starts on a pin, NovaLang may do it for convenience), the
+  dispatcher stores the wire in the **nearest free hole the board joins to
+  that pin's hole** (same row strip or rail line). The pin's own hole is
+  taken by the pin, and electrically the result is identical (D-011).
 
 ### Netlist
 
@@ -156,10 +165,12 @@ union-find over terminal keys:
 1. Seed every terminal in the board spec. Union each terminal strip (holes
    `a–e` of one row, holes `f–j` of one row) and each rail line, or each
    rail half when `splitRails` is set.
-2. Register part pins and union each pin with its hole (Phase 1).
-3. Union the two ends of each wire, and ends of a closed switch (Phase 2 or
-   later; switch state is re-unioned per sim step, not stored in the
-   static netlist).
+2. Register part pins and union each pin with its hole.
+3. Union the two ends of each wire.
+
+`circuitNetlist(circuit)` does all three. A closed switch is **not** in the
+static netlist: whether a switch conducts is sim state, joined per sim step
+from Phase 2 on.
 
 `resolveNet(ref)` returns every terminal electrically joined to `ref`,
 sorted by key. Its result round-trips: for every `t` in `resolveNet(r)`,
@@ -180,6 +191,9 @@ pixels, so domain code never knows about pixels.
 
 - Columns `a–e` and `f–j` with a 0.3" centre channel between `e` and `f`
   (exactly the width of a DIP package, so a 74xx chip straddles it).
+  Drawn as on most real boards: `j` at the top, `a` nearest the viewer. A
+  DIP with pin 1 in `e` then reads like the real part: notch left, pin 1
+  bottom-left, pins numbered counterclockwise seen from above (D-009).
 - Four rails: `top+`, `top-`, `bottom+`, `bottom-`. Rail holes come in
   groups of 5 with one empty pitch between groups, centred along the board.
 - `splitRails` (config flag, default `false`) splits each rail line into

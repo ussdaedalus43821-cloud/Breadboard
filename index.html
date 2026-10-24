@@ -14,6 +14,30 @@
       main {
         padding: 16px;
       }
+      #palette {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 12px;
+      }
+      #palette button {
+        font: inherit;
+        padding: 6px 12px;
+        border: 1px solid #4a4d55;
+        border-radius: 6px;
+        background: #383a40;
+        color: inherit;
+        cursor: pointer;
+      }
+      #palette button[aria-pressed='true'] {
+        background: #ff9f1c;
+        border-color: #ff9f1c;
+        color: #1b1b1b;
+      }
+      #board {
+        display: block;
+        touch-action: none;
+      }
       #status {
         margin-top: 8px;
         font-family: ui-monospace, monospace;
@@ -22,8 +46,22 @@
   </head>
   <body>
     <main>
+      <div id="palette" role="toolbar" aria-label="Parts">
+        <button type="button" data-tool="select" aria-pressed="true">Select</button>
+        <button type="button" data-tool="part" data-type="led-red" aria-pressed="false">LED</button>
+        <button type="button" data-tool="part" data-type="resistor" aria-pressed="false">
+          Resistor
+        </button>
+        <button type="button" data-tool="part" data-type="switch-spst" aria-pressed="false">
+          SPST switch
+        </button>
+        <button type="button" data-tool="wire" aria-pressed="false">Wire</button>
+        <button type="button" data-tool="part" data-type="chip74hc00" aria-pressed="false">
+          74HC00
+        </button>
+      </div>
       <canvas id="board"></canvas>
-      <div id="status">Click a hole.</div>
+      <div id="status"></div>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>

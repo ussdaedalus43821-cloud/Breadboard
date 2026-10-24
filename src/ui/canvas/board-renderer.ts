@@ -1,4 +1,5 @@
-// Draws an empty breadboard and hit-tests holes. Phase 0: no parts, no sim.
+// Draws the breadboard, placed parts, wires and the editor preview, and
+// hit-tests holes. No sim state yet (Phase 2).
 
 import {
   boardTerminals,
@@ -7,8 +8,22 @@ import {
   type BoardSpec,
   type BoardTerminal,
 } from '../../domain/breadboard/spec';
-import { COLUMNS, terminalKey } from '../../domain/breadboard/terminal';
+import { COLUMNS } from '../../domain/breadboard/terminal';
+import type { Circuit } from '../../domain/circuit/circuit';
+import { getPartDef } from '../../domain/parts/registry';
+import type { Preview } from '../editor/editor';
 import { createBoardLayout, type BoardLayout } from './board-layout';
+import { drawPart, drawWire } from './part-shapes';
+
+/** Everything one frame shows. */
+export interface Scene {
+  readonly circuit?: Circuit;
+  readonly preview?: Preview;
+  /** Hole under the pointer, outlined. */
+  readonly hover?: BoardTerminal | null;
+  /** Free-floating wire end (pixels) while dragging off any hole. */
+  readonly pointer?: { readonly x: number; readonly y: number } | null;
+}
 
 const THEME = {
   board: '#f4f1e8',
@@ -23,7 +38,6 @@ const THEME = {
 
 export class BoardRenderer {
   readonly layout: BoardLayout;
-  private selected: BoardTerminal | null = null;
   private readonly ctx: CanvasRenderingContext2D;
 
   constructor(
@@ -50,12 +64,13 @@ export class BoardRenderer {
     return terminalAtPoint(this.spec, p.x, p.y);
   }
 
-  select(ref: BoardTerminal | null): void {
-    this.selected = ref;
-    this.draw();
+  /** Canvas-local pixel position of a pointer event. */
+  localPoint(clientX: number, clientY: number): { x: number; y: number } {
+    const rect = this.canvas.getBoundingClientRect();
+    return { x: clientX - rect.left, y: clientY - rect.top };
   }
 
-  draw(): void {
+  draw(scene: Scene = {}): void {
     const { ctx, layout, spec } = this;
     const px = layout.pitchPx;
     ctx.clearRect(0, 0, layout.widthPx, layout.heightPx);
@@ -68,7 +83,7 @@ export class BoardRenderer {
     ctx.fill();
     ctx.stroke();
 
-    // Centre channel between e (y=7) and f (y=10).
+    // Centre channel between f (y=7) and e (y=10).
     const ch = layout.toPixel({ x: 0, y: 8.5 });
     ctx.fillStyle = THEME.channel;
     ctx.fillRect(layout.marginPx / 2, ch.y - px * 0.4, layout.widthPx - layout.marginPx, px * 0.8);
@@ -103,16 +118,51 @@ export class BoardRenderer {
     }
     for (let row = 1; row <= spec.rows; row++) {
       if (row !== 1 && row % 5 !== 0) continue;
-      const top = layout.toPixel(terminalPosition(spec, { kind: 'hole', column: 'a', row }));
+      const top = layout.toPixel(terminalPosition(spec, { kind: 'hole', column: 'j', row }));
       ctx.fillText(String(row), top.x, top.y - px * 0.9);
     }
 
-    const selectedKey = this.selected ? terminalKey(this.selected) : null;
     const s = px * 0.32;
+    ctx.fillStyle = THEME.hole;
     for (const t of boardTerminals(spec)) {
       const p = layout.toPixel(terminalPosition(spec, t));
-      ctx.fillStyle = terminalKey(t) === selectedKey ? THEME.holeSelected : THEME.hole;
       ctx.fillRect(p.x - s / 2, p.y - s / 2, s, s);
+    }
+
+    const { circuit, preview, hover, pointer } = scene;
+    if (circuit) {
+      for (const part of circuit.parts) {
+        drawPart(ctx, spec, layout, getPartDef(part.type), part.pins, part.id);
+      }
+      for (const wire of circuit.wires) drawWire(ctx, spec, layout, wire);
+    }
+
+    if (preview?.kind === 'part' && preview.pins) {
+      drawPart(ctx, spec, layout, getPartDef(preview.type), preview.pins, '', {
+        ghost: true,
+        invalid: !preview.valid,
+      });
+    } else if (preview?.kind === 'wire') {
+      const to = preview.to ?? (pointer ? layout.toPixel(layout.toPitch(pointer)) : null);
+      if (to) {
+        drawWire(
+          ctx,
+          spec,
+          layout,
+          { id: 'W0', from: preview.from, to },
+          {
+            ghost: true,
+            invalid: !preview.valid,
+          },
+        );
+      }
+    }
+
+    if (hover) {
+      const p = layout.toPixel(terminalPosition(spec, hover));
+      ctx.strokeStyle = THEME.holeSelected;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(p.x - px * 0.4, p.y - px * 0.4, px * 0.8, px * 0.8);
     }
   }
 }

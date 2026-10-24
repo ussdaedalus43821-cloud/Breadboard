@@ -1,17 +1,20 @@
 // Breadboard geometry, in pitch units (1 unit = 0.1" = 2.54 mm).
 // See docs/ARCHITECTURE.md §5. Pixels are the renderer's business.
 //
-// Layout (landscape, row numbers run left to right along x):
+// Layout (landscape, row numbers run left to right along x). Columns a–e
+// sit nearest the viewer, as on most real boards, so a DIP chip with pin 1
+// in column e reads like the real part: notch left, pin 1 bottom-left,
+// numbering counterclockwise seen from above.
 //
 //   y=0   top+     ─ ─ ─ ─ ─   ─ ─ ─ ─ ─   …   rail holes, groups of 5
 //   y=1   top-     ─ ─ ─ ─ ─   ─ ─ ─ ─ ─   …
-//   y=3   a  ┐
-//    …       ├ one terminal strip per row (a–e)
-//   y=7   e  ┘
-//         ── centre channel (e→f is 0.3", one DIP width) ──
-//   y=10  f  ┐
+//   y=3   j  ┐
 //    …       ├ one terminal strip per row (f–j)
-//   y=14  j  ┘
+//   y=7   f  ┘
+//         ── centre channel (f→e is 0.3", one DIP width) ──
+//   y=10  e  ┐
+//    …       ├ one terminal strip per row (a–e)
+//   y=14  a  ┘
 //   y=16  bottom-
 //   y=17  bottom+
 
@@ -55,16 +58,16 @@ export interface BoardOptions {
 }
 
 const COLUMN_Y: Readonly<Record<ColumnLetter, number>> = {
-  a: 3,
-  b: 4,
-  c: 5,
-  d: 6,
-  e: 7,
-  f: 10,
-  g: 11,
-  h: 12,
-  i: 13,
-  j: 14,
+  j: 3,
+  i: 4,
+  h: 5,
+  g: 6,
+  f: 7,
+  e: 10,
+  d: 11,
+  c: 12,
+  b: 13,
+  a: 14,
 };
 
 const RAIL_Y: Readonly<Record<RailId, number>> = {

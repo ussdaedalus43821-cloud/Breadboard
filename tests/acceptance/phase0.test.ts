@@ -38,7 +38,7 @@ describe('board geometry', () => {
   it('places e and f exactly one DIP width (0.3") apart', () => {
     const e = terminalPosition(half, hole('e', 10));
     const f = terminalPosition(half, hole('f', 10));
-    expect(f.y - e.y).toBe(3);
+    expect(e.y - f.y).toBe(3); // e is nearer the viewer
     expect(f.x).toBe(e.x);
   });
 
