@@ -3,9 +3,18 @@
 
 import type { PyodideAPI } from 'pyodide';
 
+/**
+ * public/nova/tools/ files NovaLang loads at run time. Since 2.0 every program
+ * that imports a module is type-checked first, and the checker lives in
+ * tools/ next to novalang.py (D-049).
+ */
+export const NOVA_TOOL_FILES = ['nova-typecheck.py', 'nova_ast.py', 'nova_scope.py'] as const;
+
 export interface NovaSources {
   /** public/nova/novalang.py, unmodified. */
   readonly novalang: string;
+  /** public/nova/tools/<file>, unmodified, one per NOVA_TOOL_FILES entry. */
+  readonly tools: Readonly<Record<(typeof NOVA_TOOL_FILES)[number], string>>;
   /** src/nova/host.py. */
   readonly host: string;
 }
@@ -32,6 +41,8 @@ export class NovaRuntime {
   static create(py: PyodideAPI, sources: NovaSources): NovaRuntime {
     py.FS.mkdirTree('/nova');
     py.FS.writeFile('/nova/novalang.py', sources.novalang);
+    py.FS.mkdirTree('/nova/tools');
+    for (const file of NOVA_TOOL_FILES) py.FS.writeFile(`/nova/tools/${file}`, sources.tools[file]);
     py.FS.writeFile('/nova/breadboard_host.py', sources.host);
     // input() has no terminal here: stdin is always at end-of-input, which
     // NovaLang reports as a catchable "input() found no more input to read".

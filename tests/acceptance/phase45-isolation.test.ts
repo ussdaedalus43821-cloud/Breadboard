@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { BRIDGE_COMMANDS, BRIDGE_QUERIES } from '../../src/protocol/bridge';
+import { NOVA_TOOL_FILES } from '../../src/nova/runtime';
 import { bench, novaRuntime, read } from '../support/nova-node';
 
 beforeAll(async () => {
@@ -26,14 +27,30 @@ describe('no path from a script to Python objects (D-032)', () => {
     });
   });
 
-  it('a module the script writes and imports does not get python.* either', async () => {
-    const { outcome } = await lines(
-      'write("/tmp/m.nova", "export let p = python")\nimport "/tmp/m.nova" as m',
+  it('a module the script writes and imports cannot use python.* either', async () => {
+    // NovaLang 2.x defines `python` in imported modules, but with the bridge
+    // off ([py.off], the default since 2.1) every member fails (D-049).
+    const { outcome, stdout } = await lines(
+      [
+        'write("/tmp/m.nova", "export let p = python")',
+        'import "/tmp/m.nova" as m',
+        'for k in keys(m.p) {',
+        '  try { m.p[k]("json") ; print(k + " OPEN") } catch e { print(k + " " + str(e)) }',
+        '}',
+      ].join('\n'),
     );
-    expect(outcome).toMatchObject({
-      ok: false,
-      message: expect.stringContaining("undefined name 'python'"),
-    });
+    expect(outcome).toEqual({ ok: true });
+    expect(stdout).toHaveLength(4);
+    for (const line of stdout)
+      expect(line).toMatch(/^(import|call|get|set) .*python\.\* is disabled/);
+  });
+
+  it('a script can import a module it wrote (the 2.x type gate runs under Pyodide)', async () => {
+    const { outcome, stdout } = await lines(
+      'write("/tmp/sq.nova", "export def sq(x) { return x * x }")\nimport "/tmp/sq.nova" as m\nprint(m.sq(7))',
+    );
+    expect(outcome).toEqual({ ok: true });
+    expect(stdout).toEqual(['49']);
   });
 
   it.each([
@@ -57,12 +74,14 @@ describe('no path from a script to Python objects (D-032)', () => {
     expect((await b.run('print(board.new("half")["rows"])')).stdout).toEqual(['30']);
   });
 
-  it('runaway recursion is a caught RecursionError, not a Pyodide crash', async () => {
+  it('runaway recursion is a caught script error, not a Pyodide crash', async () => {
+    // Since 2.0 NovaLang stops at its own call-depth limit (1200) before
+    // Python's recursion limit; host.py still catches RecursionError as a backstop.
     const { outcome } = await lines('def f(n) { return f(n + 1) }\nf(0)');
     expect(outcome).toEqual({
       ok: false,
       kind: 'error',
-      message: 'RecursionError: the script recursed too deeply',
+      message: 'call depth of 1200 exceeded - is the recursion missing a base case?',
     });
     expect(
       (
@@ -164,7 +183,12 @@ describe('NovaLang is vendored unmodified', () => {
   it('public/nova files match the hashes recorded in VERSION', () => {
     const version = read('public/nova/VERSION');
     const recorded = [...version.matchAll(/^sha256: ([0-9a-f]{64}) {2}(\S+)$/gm)];
-    expect(recorded.map((m) => m[2])).toEqual(['novalang.py', 'bootstrap.py', 'novalang.nova']);
+    expect(recorded.map((m) => m[2])).toEqual([
+      'novalang.py',
+      'bootstrap.py',
+      'novalang.nova',
+      ...NOVA_TOOL_FILES.map((f) => `tools/${f}`),
+    ]);
     for (const [, hash, file] of recorded) {
       expect(
         createHash('sha256')

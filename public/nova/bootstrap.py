@@ -42,7 +42,55 @@ def nova_string_literal(text):
     return '"' + escaped + '"'
 
 
-def run_bootstrap(target_path, engine_path=DEFAULT_ENGINE, script_args=None):
+def type_check_graph(target_path, allow=None):
+    """Lines describing every type error in `target_path` and the modules
+    it imports, or [] if there are none (or the target cannot be read or
+    parsed - novalang.nova reports those problems itself). `allow(path)`
+    limits which modules the walk may read (the restricted profile's import grants)."""
+    try:
+        with open(target_path, "r", encoding="utf-8") as handle:
+            source = handle.read()
+        ast = novalang.Parser(novalang.Lexer(source).tokenize()).parse()
+    except (OSError, UnicodeDecodeError, NovaError, RecursionError):
+        return []          # novalang.nova reports a text it cannot read, or one nested too deeply, itself
+    if not (ast.annotated or ast.imports):
+        return []
+    lines = novalang.typecheck_tool().check_file_graph(target_path, allow)
+    return ["TypeCheckError: " + line for line in lines]
+
+
+def nova_literal(value):
+    """A Python value (str, bool, int, list, dict) as NovaLang source text."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str):
+        return nova_string_literal(value)
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(nova_literal(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return "{" + ", ".join("{}: {}".format(nova_string_literal(key), nova_literal(item))
+                               for key, item in value.items()) + "}"
+    raise TypeError("cannot write {!r} as NovaLang".format(value))
+
+
+def sandbox_config(settings):
+    """The engine's sandbox settings (Capabilities.settings) as the dictionary novalang.nova's
+    configure_sandbox() reads: every setting present, so the engine need not default any."""
+    config = {"profile": settings.get("profile", "trusted"), "limits": settings.get("limits", {}),
+              "deterministic": bool(settings.get("deterministic", False)),
+              "seed": settings.get("seed", 0),
+              "clock_start": "{:.9f}".format(float(settings.get("clock_start", 0.0)))}
+    for name in ("read", "write", "import_from", "env", "python"):
+        config[name] = list(settings.get(name, ()))
+    for name in ("clock", "random", "stdin", "process", "regex"):
+        config[name] = bool(settings.get(name, False))
+    return config
+
+
+def run_bootstrap(target_path, engine_path=DEFAULT_ENGINE, script_args=None, engine=None,
+                  allow_python=False, sandbox=None):
     """Run `target_path` through the self-hosted interpreter defined in
     `engine_path`. `script_args` become what the target's own args() call
     sees - the Stage 11 standard-library built-in, read from novalang.py's
@@ -57,9 +105,49 @@ def run_bootstrap(target_path, engine_path=DEFAULT_ENGINE, script_args=None):
         return 1
 
     target_path = os.path.abspath(target_path)
-    program = engine_source + "\nrun_file({})\n".format(nova_string_literal(target_path))
 
-    interpreter = Interpreter()
+    # The self-hosted interpreter reads the target and its imports itself,
+    # out of sight of novalang.py's type gate, so the whole import graph
+    # is type-checked here, before novalang.nova ever sees it.
+    # In the restricted profile the walk reads only what the program could itself import: the
+    # target, and modules whose real path lies inside an import grant, judged before the file is
+    # opened (the same rule the engine applies, [sbx.paths]). A module outside the grants is left
+    # unchecked here and refused by the engine when the program imports it (D-045).
+    restricted = bool(sandbox) and sandbox.get("profile") == "restricted"
+    configured = restricted or bool(sandbox and sandbox.get("deterministic"))
+    if restricted:
+        roots = novalang.Capabilities(**sandbox).roots["import"]
+
+        def granted(path):
+            real = novalang.real_path(path)
+            return real is not None and any(novalang.inside_folder(real, root) for root in roots)
+
+        refusal = type_check_graph(target_path, granted)
+    else:
+        refusal = type_check_graph(target_path)
+    if refusal:
+        print("\n".join(refusal), file=sys.stderr)
+        return 1
+
+    program = engine_source
+    if configured:
+        program += "\nconfigure_sandbox({})\n".format(nova_literal(sandbox_config(sandbox)))
+    program += "\nrun_file({})\n".format(nova_string_literal(target_path))
+
+    # `engine` ("vm" or "tree") is passed in, never read from novalang's
+    # DEFAULT_ENGINE: when novalang.py runs as a script it is __main__, and
+    # `import novalang` here is a second copy that never saw --tree-walk.
+    # `allow_python` is passed in for the same reason as `engine`: the flag was
+    # read by the __main__ copy of novalang.py, not by this module's copy.
+    # novalang.nova forwards python.* to this interpreter's own `python`, so
+    # the one switch covers the program it runs.
+    if restricted:
+        # The engine that runs novalang.nova stays trusted (it reads files for the program), but
+        # the Python bridge it forwards to the program is limited to the granted modules.
+        allow_python = bool(sandbox.get("python"))
+    interpreter = Interpreter(engine, allow_python=allow_python)
+    if restricted:
+        interpreter.python_override = tuple(sandbox.get("python", ()))
     # novalang.nova tracks "the directory of whichever file is currently
     # executing" itself, in its own FILE_STACK - run_file() pushes the
     # target's directory before running it, so the target's own relative
@@ -85,10 +173,17 @@ def run_bootstrap(target_path, engine_path=DEFAULT_ENGINE, script_args=None):
 
 def main(argv):
     if len(argv) < 2:
-        print("usage: bootstrap.py <target.nova> [script args...]", file=sys.stderr)
+        print("usage: bootstrap.py [--allow-python] <target.nova> [script args...]", file=sys.stderr)
         return 2
-    target_path = argv[1]
-    return run_bootstrap(target_path, script_args=argv[2:])
+    args = argv[1:]
+    allow_python = False
+    if args and args[0] == "--allow-python":
+        allow_python = True
+        args = args[1:]
+        if not args:
+            print("usage: bootstrap.py [--allow-python] <target.nova> [script args...]", file=sys.stderr)
+            return 2
+    return run_bootstrap(args[0], script_args=args[1:], allow_python=allow_python)
 
 
 if __name__ == "__main__":

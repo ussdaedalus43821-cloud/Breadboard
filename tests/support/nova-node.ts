@@ -5,7 +5,13 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { loadPyodide } from 'pyodide';
-import { NovaRuntime, type RunOutcome, type Transport } from '../../src/nova/runtime';
+import {
+  NOVA_TOOL_FILES,
+  NovaRuntime,
+  type NovaSources,
+  type RunOutcome,
+  type Transport,
+} from '../../src/nova/runtime';
 import type { SimMessage } from '../../src/protocol/sim-protocol';
 import { handleBridge } from '../../src/worker/bridge';
 import { SimService } from '../../src/worker/sim-service';
@@ -20,6 +26,9 @@ export function novaRuntime(): Promise<NovaRuntime> {
   shared ??= loadPyodide().then((py) =>
     NovaRuntime.create(py, {
       novalang: read('public/nova/novalang.py'),
+      tools: Object.fromEntries(
+        NOVA_TOOL_FILES.map((f) => [f, read(`public/nova/tools/${f}`)]),
+      ) as NovaSources['tools'],
       host: read('src/nova/host.py'),
     }),
   );

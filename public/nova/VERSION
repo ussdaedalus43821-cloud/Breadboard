@@ -1,7 +1,10 @@
-NovaLang v1.1.0 — vendored, unmodified (docs/DECISIONS.md D-003, D-030).
+NovaLang v2.2.0 — vendored, unmodified (docs/DECISIONS.md D-003, D-030, D-049).
 source: ussdaedalus43821-cloud/nova_lang
-commit: 02eabdbdb19a1c4c31a1121ee7674c6f7015e701
-files: novalang.py bootstrap.py novalang.nova
-sha256: dd6462f6e2b36aa5eefc7a25c11a58f2d8ea3754b2e2c09b96f65c30ac943018  novalang.py
-sha256: fc7b35d200c91aec7d032483fa106013762240d1a76d95e1eee65d78d644cc87  bootstrap.py
-sha256: 527477769c6dad1077d3104934bdc983c4413827008d6279ad7c3b93b2e3b161  novalang.nova
+commit: f8e1dc28d4454bfdb010e99b6dac1b685b848e36
+files: novalang.py bootstrap.py novalang.nova tools/nova-typecheck.py tools/nova_ast.py tools/nova_scope.py
+sha256: 26dbad2a9cb6f814cfceed635f247da3e8a0bda8c2eda1864ae30b4021363386  novalang.py
+sha256: 12ca86cb3200283b06943c5a56081519cc2a013952e79f3722386dd02ddf43ac  bootstrap.py
+sha256: 3e9f4d5a8f42f181ac4805340a8c1448f719d1b4c387b503ec56785c2f0e710e  novalang.nova
+sha256: caf2fa7047ec2f526a8a7db7c8db000fb4c0621e8a4a177b91bcafa14990da05  tools/nova-typecheck.py
+sha256: bfe130f68faad19b9acf718d114775f86eaf8b2caae1d74e6f52f7b87038f066  tools/nova_ast.py
+sha256: 95e0f8edcb61a19fd2e2463bea6f0e10350cf1d0673167c0a897e4ff4502af80  tools/nova_scope.py

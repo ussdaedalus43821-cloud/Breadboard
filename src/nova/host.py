@@ -102,9 +102,12 @@ def run_script(source, transport, max_calls=MAX_BRIDGE_CALLS):
     {"ok": true} or {"ok": false, "kind": "error" | "timeout" | "internal", "message": ...}.
     """
     bridge = _Bridge(transport, int(max_calls))
-    engine = Nova()
-    # No python.*: see the module docstring. Imported .nova modules start from
-    # fresh, empty globals, so they never see it either.
+    # No python.*: see the module docstring. allow_python=False is NovaLang's
+    # default since 2.1 ([py.off]); it is spelled out because the isolation
+    # depends on it. The top-level script loses the name entirely. Imported
+    # .nova modules still see a `python` dict on 2.x, but every member of it
+    # raises "python.* is disabled" (D-049).
+    engine = Nova(allow_python=False)
     del engine.interpreter.globals.values["python"]
     engine.expose_global("board", _calls(bridge, "board", BOARD_CALLS))
     engine.expose_global("sim", _calls(bridge, "sim", SIM_CALLS))

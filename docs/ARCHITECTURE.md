@@ -477,14 +477,18 @@ One phase per session. Each ends with green tests, a demo script in
 
 ## 8. NovaLang as a dependency
 
-- Source: the NovaLang repo, v1.1.0. It is treated as a third-party
-  library and **not modified**.
+- Source: the NovaLang repo, v2.2.0 (commit `f8e1dc2`; v1.1.0 until
+  D-049). It is treated as a third-party library and **not modified**.
 - Vendored (Phase 4.5) into `public/nova/`: `novalang.py`, `bootstrap.py`
   and `novalang.nova`, plus `public/nova/VERSION` recording the source repo,
   commit and each file's SHA-256. A test checks the hashes, so the copies
   cannot drift unnoticed. Only `novalang.py` is loaded at run time. The
-  others are kept for parity with upstream. `lib/` (ECS, spatial hash) is
-  not vendored: nothing here uses it (D-030).
+  others are kept for parity with upstream. Since 2.x the interpreter
+  also loads its type checker from `tools/` (`nova-typecheck.py`,
+  `nova_ast.py`, `nova_scope.py`) whenever a script imports a module, so
+  those three are vendored into `public/nova/tools/` and written into
+  Pyodide's filesystem next to `novalang.py` (D-049). `lib/` (ECS, spatial
+  hash) is not vendored: nothing here uses it (D-030).
 - Updating NovaLang means re-copying the files and updating `VERSION` in
   one commit, then running the isolation tests. They pin the behaviours
   Breadboard depends on and the ones it works around (D-032).
@@ -514,7 +518,7 @@ headers, for a local check.
 itch.io serves an HTML game from a subfolder of its own CDN, inside an
 iframe, so the build must use relative paths: `npm run build:itch` builds
 with `--base=./` into `dist-itch/` and zips it as `breadboard-itch.zip`
-(about 6.5 MB, 20 files). Upload it as an HTML project. In the embed
+(about 6.6 MB, 24 files). Upload it as an HTML project. In the embed
 options, tick **SharedArrayBuffer support**: that makes itch send
 COOP/COEP, without which the NovaLang panel says scripting is unavailable
 (the simulator still works). Saves live in the iframe origin's

@@ -508,3 +508,33 @@ particular circuit. The toolbar's **?** button opens it again.
 The clocked counter demo is the manual decade counter with SW1, its
 pull-down and its +5 V wire replaced by a 1 Hz CLK lead at `a47`, so it
 counts without any clicks.
+
+## D-049 — NovaLang upgraded from v1.1.0 to v2.2.0 (Accepted)
+
+The vendored files now come from the NovaLang repo at tag `v2.2.0`
+(commit `f8e1dc2`), still unmodified, with `public/nova/VERSION` and its
+hash test updated. 2.x runs scripts on a bytecode VM instead of the
+tree-walker. Three things changed for Breadboard, each pinned by
+`tests/acceptance/phase45-isolation.test.ts`:
+
+- **The type gate needs `tools/`.** Since 2.0 a program that imports a
+  module is type-checked first, and `novalang.py` loads the checker from
+  `tools/` beside itself. Without it, any script with an `import` failed
+  with an internal `FileNotFoundError`. `nova-typecheck.py`, `nova_ast.py`
+  and `nova_scope.py` are vendored (amending D-030's three-file list),
+  `NOVA_TOOL_FILES` in `src/nova/runtime.ts` names them, and the worker and
+  the tests write them to `/nova/tools/` in Pyodide. A new test imports a
+  module a script wrote.
+- **Imported modules see `python` again, but it is off.** 2.x defines the
+  `python` dict in imported modules, so D-032's "modules never see it" no
+  longer holds. Since 2.1 the bridge is off by default (`[py.off]`): every
+  member fails with `python.* is disabled`. `host.py` now passes
+  `allow_python=False` explicitly and still deletes the global from the
+  top-level script; the test checks all four members fail from a module.
+- **Runaway recursion** stops at NovaLang's own call depth (1 200) with a
+  catchable script error before Python's limit. `host.py` keeps restoring
+  Pyodide's recursion limit and catching `RecursionError` as a backstop.
+
+Not adopted: 2.2's `restricted` profile. It would deny file writes,
+imports, the clock and randomness that scripts may use today, so turning
+it on is a behaviour change for its own decision.

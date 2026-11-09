@@ -1,5 +1,5 @@
 # novalang.nova - NovaLang's own Lexer, Parser and Interpreter, written in
-# NovaLang itself. Part of the NovaLang v1.1.0 release.
+# NovaLang itself. Part of the NovaLang v2.2.0 release.
 #
 # This file is a normal .nova program. Loaded and run by the host
 # (novalang.py), it defines a second, self-hosted implementation of the
@@ -101,6 +101,9 @@ def push_token(state, kind, value, pos) {
     append(state["tokens"], {kind: kind, value: value, pos: pos})
 }
 
+# The language's bound on a number's digits ([port.integers]).
+let MAX_NUMBER_DIGITS = 4000
+
 def lex_number(state) {
     let start = state["index"]
     let text = ""
@@ -110,13 +113,23 @@ def lex_number(state) {
         if is_digit(ch) {
             text = text + ch
             state["index"] = state["index"] + 1
-        } else if ch == "." and not seen_dot {
+        } else if ch == "." {
+            if seen_dot {
+                lex_error("a number cannot have two decimal points", state["index"] - 1)
+            }
             seen_dot = true
             text = text + ch
             state["index"] = state["index"] + 1
         } else {
             break
         }
+    }
+    let digit_count = len(text)
+    if seen_dot {
+        digit_count = digit_count - 1
+    }
+    if digit_count > MAX_NUMBER_DIGITS {
+        lex_error("this number has too many digits", start)
     }
     push_token(state, "NUMBER", num(text), start)
 }
@@ -162,7 +175,7 @@ def lex_string(state) {
     let text = ""
     while true {
         let ch = lex_peek(state, 0)
-        if ch == "" or ch == "\n" {
+        if ch == "" or ch == "\n" or ch == "\r" {
             lex_error("this string is never closed", start)
         }
         state["index"] = state["index"] + 1
@@ -183,7 +196,7 @@ def lex_fstring_placeholder(state, begin) {
     let inside = ""
     while true {
         let ch = lex_peek(state, 0)
-        if ch == "" or ch == "\n" {
+        if ch == "" or ch == "\n" or ch == "\r" {
             lex_error("this f-string placeholder needs a closing '}'", begin)
         }
         if inside != "" {
@@ -229,7 +242,7 @@ def lex_fstring(state) {
     let text = ""
     while true {
         let ch = lex_peek(state, 0)
-        if ch == "" or ch == "\n" {
+        if ch == "" or ch == "\n" or ch == "\r" {
             lex_error("this f-string is never closed", start)
         }
         if ch == quote {
@@ -293,12 +306,17 @@ def tokenize(source) {
         if is_space(ch) {
             state["index"] = state["index"] + 1
         } else if ch == "\r" {
+            # "\r\n" is one line break (its "\n" makes the token); a lone
+            # "\r" is a line break too, as in editors and the host.
             state["index"] = state["index"] + 1
+            if lex_peek(state, 0) != "\n" {
+                push_token(state, "NEWLINE", "\n", start)
+            }
         } else if ch == "\n" or ch == ";" {
             state["index"] = state["index"] + 1
             push_token(state, "NEWLINE", ch, start)
         } else if ch == "#" {
-            while state["index"] < length and state["source"][state["index"]] != "\n" {
+            while state["index"] < length and state["source"][state["index"]] != "\n" and state["source"][state["index"]] != "\r" {
                 state["index"] = state["index"] + 1
             }
         } else if is_digit(ch) or (ch == "." and lex_peek(state, 1) != "" and is_digit(lex_peek(state, 1))) {
@@ -383,13 +401,53 @@ def p_describe(token) {
         return "the end of the line"
     }
     if token["kind"] == "STRING" {
-        return "the string " + str(token["value"])
+        return "the string " + quote_text(token["value"])
     }
-    return str(token["value"])
+    if token["kind"] == "FSTRING" {
+        return "an f-string"
+    }
+    if token["kind"] == "NUMBER" {
+        return str(token["value"])
+    }
+    return quote_text(str(token["value"]))
+}
+
+# Quotes text the way the host's repr does: single quotes unless the text
+# holds a single quote and no double quote; backslash and control characters
+# are escaped.
+def quote_text(text) {
+    let quote = "'"
+    if "'" in text and not ("\"" in text) {
+        quote = "\""
+    }
+    let out = quote
+    for ch in text {
+        if ch == "\\" {
+            out = out + "\\\\"
+        } else if ch == quote {
+            out = out + "\\" + quote
+        } else if ch == "\n" {
+            out = out + "\\n"
+        } else if ch == "\t" {
+            out = out + "\\t"
+        } else if ch == "\r" {
+            out = out + "\\r"
+        } else {
+            out = out + ch
+        }
+    }
+    return out + quote
 }
 
 def p_error(message, pos) {
     throw("ParseError@" + str(pos) + ": " + message)
+}
+
+# Built-ins are reserved: `print = 3` and `def print()` are both errors.
+def p_guard_name(name, pos, role) {
+    if name in BUILTIN_NAMES {
+        p_error("'" + name + "' is a built-in function and cannot be used as " + role + " name", pos)
+    }
 }
 
 def p_expect(p, kind, desc) {
@@ -471,7 +529,24 @@ def p_optional_keyword(p, kind) {
     return false
 }
 
+# How deeply the program's own text may nest (brackets, blocks): the specification's minimum,
+# 100 levels ([sbx.limits], nesting). Each level costs about ten calls of this parser, so the
+# host's own call-depth limit would end a deeper program with the wrong words.
+let NESTING = {depth: 0, limit: 100}
+
+def nesting_enter() {
+    NESTING["depth"] = NESTING["depth"] + 1
+    if NESTING["depth"] > NESTING["limit"] {
+        throw("the interpreter ran out of stack - recursion too deep")
+    }
+}
+
+def nesting_leave() {
+    NESTING["depth"] = NESTING["depth"] - 1
+}
+
 def parse_program(source) {
+    NESTING["depth"] = 0
     let p = {tokens: tokenize(source), index: 0, last_statement: {kind: "Program"}}
     let statements = []
     p_skip_newlines(p)
@@ -486,6 +561,7 @@ def parse_program(source) {
 }
 
 def parse_block(p) {
+    nesting_enter()
     p_skip_newlines(p)
     let opening = p_expect(p, "LBRACE", "a '{' to open the block")
     let statements = []
@@ -501,6 +577,7 @@ def parse_block(p) {
         p_error("this block is never closed with '}'", opening["pos"])
     }
     p_advance(p)
+    nesting_leave()
     return {kind: "Block", statements: statements, pos: opening["pos"]}
 }
 
@@ -550,15 +627,33 @@ def parse_statement(p) {
     return parse_expression_statement(p)
 }
 
+# Type annotations (`a: int`, `-> int`, `let x: int`) are parsed and kept
+# but never acted on: like the host, this interpreter runs annotated code
+# exactly as it runs unannotated code. Checking them is nova-typecheck's job.
+def parse_optional_annotation(p) {
+    if p_current(p)["kind"] != "COLON" {
+        return ""
+    }
+    p_advance(p)
+    return p_expect(p, "IDENT", "a type name, such as int or string")["value"]
+}
+
 def parse_function_def(p) {
     let keyword = p_advance(p)
     let name = p_expect(p, "IDENT", "a function name after 'def'")
+    p_guard_name(name["value"], name["pos"], "a function")
     p_expect(p, "LPAREN", "a '(' after the function name")
     let params = []
+    let param_types = []
     if p_current(p)["kind"] != "RPAREN" {
         while true {
             let param = p_expect(p, "IDENT", "a parameter name")
+            p_guard_name(param["value"], param["pos"], "a parameter")
+            if param["value"] in params {
+                p_error("parameter '" + param["value"] + "' is listed twice", param["pos"])
+            }
             append(params, param["value"])
+            append(param_types, parse_optional_annotation(p))
             if p_current(p)["kind"] != "COMMA" {
                 break
             }
@@ -566,8 +661,25 @@ def parse_function_def(p) {
         }
     }
     p_expect(p, "RPAREN", "a ')' to close the parameter list")
+    # `->` is '-' then '>' with nothing between, as in the host parser.
+    let return_type = ""
+    let minus = p_current(p)
+    let after = p_peek(p, 1)
+    if minus["kind"] == "MINUS" and after["kind"] == "GT" and after["pos"] == minus["pos"] + 1 {
+        p_advance(p)
+        p_advance(p)
+        return_type = p_expect(p, "IDENT", "a type name, such as int or string")["value"]
+    }
     let body = parse_block(p)
-    return {kind: "FunctionDef", name: name["value"], params: params, body: body, pos: keyword["pos"]}
+    return {
+        kind: "FunctionDef",
+        name: name["value"],
+        params: params,
+        param_types: param_types,
+        return_type: return_type,
+        body: body,
+        pos: keyword["pos"]
+    }
 }
 
 def parse_return(p) {
@@ -590,9 +702,22 @@ def parse_if(p) {
         } else {
             else_block = parse_block(p)
         }
-        return {kind: "If", condition: condition, then_block: then_block, has_else: true, else_block: else_block, pos: keyword["pos"]}
+        return {
+            kind: "If",
+            condition: condition,
+            then_block: then_block,
+            has_else: true,
+            else_block: else_block,
+            pos: keyword["pos"]
+        }
     }
-    return {kind: "If", condition: condition, then_block: then_block, has_else: false, pos: keyword["pos"]}
+    return {
+        kind: "If",
+        condition: condition,
+        then_block: then_block,
+        has_else: false,
+        pos: keyword["pos"]
+    }
 }
 
 def parse_while(p) {
@@ -600,7 +725,14 @@ def parse_while(p) {
     let condition = parse_expression(p)
     let body = parse_block(p)
     if p_optional_keyword(p, "ELSE") {
-        return {kind: "While", condition: condition, body: body, has_else: true, else_block: parse_block(p), pos: keyword["pos"]}
+        return {
+            kind: "While",
+            condition: condition,
+            body: body,
+            has_else: true,
+            else_block: parse_block(p),
+            pos: keyword["pos"]
+        }
     }
     return {kind: "While", condition: condition, body: body, has_else: false, pos: keyword["pos"]}
 }
@@ -608,17 +740,41 @@ def parse_while(p) {
 def parse_for(p) {
     let keyword = p_advance(p)
     let name = p_expect(p, "IDENT", "a loop variable after 'for'")
+    p_guard_name(name["value"], name["pos"], "a loop variable")
 
     if p_current(p)["kind"] == "COMMA" {
         p_advance(p)
         let second = p_expect(p, "IDENT", "a second loop variable after the comma")
+        p_guard_name(second["value"], second["pos"], "a loop variable")
+        if second["value"] == name["value"] {
+            p_error("both loop variables are called '" + second["value"] + "'", second["pos"])
+        }
         p_expect(p, "IN", "'in' after the loop variables")
         let iterable = parse_expression(p)
         let body = parse_block(p)
         if p_optional_keyword(p, "ELSE") {
-            return {kind: "ForIn", name: name["value"], has_second: true, second_name: second["value"], iterable: iterable, body: body, has_else: true, else_block: parse_block(p), pos: keyword["pos"]}
+            return {
+                kind: "ForIn",
+                name: name["value"],
+                has_second: true,
+                second_name: second["value"],
+                iterable: iterable,
+                body: body,
+                has_else: true,
+                else_block: parse_block(p),
+                pos: keyword["pos"]
+            }
         }
-        return {kind: "ForIn", name: name["value"], has_second: true, second_name: second["value"], iterable: iterable, body: body, has_else: false, pos: keyword["pos"]}
+        return {
+            kind: "ForIn",
+            name: name["value"],
+            has_second: true,
+            second_name: second["value"],
+            iterable: iterable,
+            body: body,
+            has_else: false,
+            pos: keyword["pos"]
+        }
     }
 
     if p_current(p)["kind"] == "IN" {
@@ -626,9 +782,26 @@ def parse_for(p) {
         let iterable = parse_expression(p)
         let body = parse_block(p)
         if p_optional_keyword(p, "ELSE") {
-            return {kind: "ForIn", name: name["value"], has_second: false, iterable: iterable, body: body, has_else: true, else_block: parse_block(p), pos: keyword["pos"]}
+            return {
+                kind: "ForIn",
+                name: name["value"],
+                has_second: false,
+                iterable: iterable,
+                body: body,
+                has_else: true,
+                else_block: parse_block(p),
+                pos: keyword["pos"]
+            }
         }
-        return {kind: "ForIn", name: name["value"], has_second: false, iterable: iterable, body: body, has_else: false, pos: keyword["pos"]}
+        return {
+            kind: "ForIn",
+            name: name["value"],
+            has_second: false,
+            iterable: iterable,
+            body: body,
+            has_else: false,
+            pos: keyword["pos"]
+        }
     }
 
     p_expect(p, "EQUALS", "a '=' or 'in' after the loop variable")
@@ -646,16 +819,45 @@ def parse_for(p) {
     }
     let body = parse_block(p)
     if p_optional_keyword(p, "ELSE") {
-        return {kind: "For", name: name["value"], start: start, end: end, step: step_node, descending: descending, body: body, has_else: true, else_block: parse_block(p), pos: keyword["pos"]}
+        return {
+            kind: "For",
+            name: name["value"],
+            start: start,
+            end: end,
+            step: step_node,
+            descending: descending,
+            body: body,
+            has_else: true,
+            else_block: parse_block(p),
+            pos: keyword["pos"]
+        }
     }
-    return {kind: "For", name: name["value"], start: start, end: end, step: step_node, descending: descending, body: body, has_else: false, pos: keyword["pos"]}
+    return {
+        kind: "For",
+        name: name["value"],
+        start: start,
+        end: end,
+        step: step_node,
+        descending: descending,
+        body: body,
+        has_else: false,
+        pos: keyword["pos"]
+    }
 }
 
 def parse_let(p) {
     let keyword = p_advance(p)
     let name = p_expect(p, "IDENT", "a name after 'let'")
+    p_guard_name(name["value"], name["pos"], "a variable")
+    let type_name = parse_optional_annotation(p)
     p_expect(p, "EQUALS", "a '=' after the name in a 'let'")
-    return {kind: "Let", name: name["value"], value: parse_expression_statement(p), pos: keyword["pos"]}
+    return {
+        kind: "Let",
+        name: name["value"],
+        type_name: type_name,
+        value: parse_expression_statement(p),
+        pos: keyword["pos"]
+    }
 }
 
 def parse_try(p) {
@@ -669,7 +871,9 @@ def parse_try(p) {
         has_catch = true
         if p_current(p)["kind"] == "IDENT" {
             catch_has_name = true
-            catch_name = p_advance(p)["value"]
+            let caught = p_advance(p)
+            p_guard_name(caught["value"], caught["pos"], "a caught error")
+            catch_name = caught["value"]
         }
         catch_block = parse_block(p)
     }
@@ -682,9 +886,17 @@ def parse_try(p) {
     if not has_catch and not has_finally {
         p_error("a 'try' needs a 'catch', a 'finally', or both", keyword["pos"])
     }
-    return {kind: "Try", body: body, has_catch: has_catch, catch_has_name: catch_has_name,
-            catch_name: catch_name, catch_block: catch_block, has_finally: has_finally,
-            finally_block: finally_block, pos: keyword["pos"]}
+    return {
+        kind: "Try",
+        body: body,
+        has_catch: has_catch,
+        catch_has_name: catch_has_name,
+        catch_name: catch_name,
+        catch_block: catch_block,
+        has_finally: has_finally,
+        finally_block: finally_block,
+        pos: keyword["pos"]
+    }
 }
 
 def parse_throw(p) {
@@ -706,7 +918,12 @@ def parse_delete(p) {
     }
     let target = parse_expression(p)
     if target["kind"] == "Member" {
-        return {kind: "Delete", target: target["target"], key: {kind: "String", value: target["name"]}, pos: keyword["pos"]}
+        return {
+            kind: "Delete",
+            target: target["target"],
+            key: {kind: "String", value: target["name"]},
+            pos: keyword["pos"]
+        }
     }
     if target["kind"] == "Index" {
         return {kind: "Delete", target: target["target"], key: target["index"], pos: keyword["pos"]}
@@ -720,20 +937,37 @@ def parse_import(p) {
     if p_current(p)["kind"] == "AS" {
         p_advance(p)
         let alias = p_expect(p, "IDENT", "a name after 'as'")
-        return {kind: "Import", path: path["value"], mode: "as", alias: alias["value"], pos: keyword["pos"]}
+        p_guard_name(alias["value"], alias["pos"], "a module alias")
+        return {
+            kind: "Import",
+            path: path["value"],
+            mode: "as",
+            alias: alias["value"],
+            pos: keyword["pos"]
+        }
     }
     if p_current(p)["kind"] == "WITH" {
         p_advance(p)
         let names = []
         while true {
             let name = p_expect(p, "IDENT", "a name to import")
+            p_guard_name(name["value"], name["pos"], "an imported name")
+            if name["value"] in names {
+                p_error("'" + name["value"] + "' is imported twice", name["pos"])
+            }
             append(names, name["value"])
             if p_current(p)["kind"] != "COMMA" {
                 break
             }
             p_advance(p)
         }
-        return {kind: "Import", path: path["value"], mode: "with", names: names, pos: keyword["pos"]}
+        return {
+            kind: "Import",
+            path: path["value"],
+            mode: "with",
+            names: names,
+            pos: keyword["pos"]
+        }
     }
     return {kind: "Import", path: path["value"], mode: "plain", pos: keyword["pos"]}
 }
@@ -759,19 +993,35 @@ def parse_expression_statement(p) {
     let equals = p_advance(p)
     let value = parse_expression_statement(p)
     if node["kind"] == "Var" {
+        p_guard_name(node["name"], node["pos"], "a variable")
         return {kind: "Assign", name: node["name"], value: value, pos: node["pos"]}
     }
     if node["kind"] == "Index" {
-        return {kind: "IndexAssign", target: node["target"], index: node["index"], value: value, pos: node["pos"]}
+        return {
+            kind: "IndexAssign",
+            target: node["target"],
+            index: node["index"],
+            value: value,
+            pos: node["pos"]
+        }
     }
     if node["kind"] == "Member" {
-        return {kind: "MemberAssign", target: node["target"], name: node["name"], value: value, pos: node["pos"]}
+        return {
+            kind: "MemberAssign",
+            target: node["target"],
+            name: node["name"],
+            value: value,
+            pos: node["pos"]
+        }
     }
     p_error("the left side of '=' must be a variable, a list item or a field", equals["pos"])
 }
 
 def parse_expression(p) {
-    return parse_or(p)
+    nesting_enter()
+    let node = parse_or(p)
+    nesting_leave()
+    return node
 }
 
 def parse_or(p) {
@@ -888,8 +1138,15 @@ def parse_index_or_slice(p, target, bracket) {
             end = parse_expression(p)
         }
         p_expect(p, "RBRACKET", "a ']' to close the slice")
-        return {kind: "Slice", target: target, has_start: has_start, start: start,
-                has_end: has_end, end: end, pos: bracket["pos"]}
+        return {
+            kind: "Slice",
+            target: target,
+            has_start: has_start,
+            start: start,
+            has_end: has_end,
+            end: end,
+            pos: bracket["pos"]
+        }
     }
     if not has_start {
         p_error("an index cannot be empty", bracket["pos"])
@@ -929,7 +1186,11 @@ def parse_fstring_node(token) {
         if part["kind"] == "text" {
             append(parts, {kind: "String", value: part["value"]})
         } else {
-            let inner = {tokens: tokenize(part["source"]), index: 0, last_statement: {kind: "Program"}}
+            let inner = {
+                tokens: tokenize(part["source"]),
+                index: 0,
+                last_statement: {kind: "Program"}
+            }
             let expr = parse_expression(inner)
             if p_current(inner)["kind"] != "EOF" {
                 p_error("unexpected " + p_describe(p_current(inner)) + " inside this f-string", part["pos"])
@@ -1085,17 +1346,19 @@ def env_define(scope, name, value) {
     scope["vars"][name] = value
 }
 
+# Updates an existing binding out to the nearest barrier; a new name is
+# created in the innermost scope, so it does not outlive its block.
 def env_assign(scope, name, value) {
-    let scope = scope
+    let search = scope
     while true {
-        if name in scope["vars"] {
-            scope["vars"][name] = value
+        if name in search["vars"] {
+            search["vars"][name] = value
             return
         }
-        if scope["barrier"] {
+        if search["barrier"] {
             break
         }
-        scope = scope["parent"]
+        search = search["parent"]
     }
     scope["vars"][name] = value
 }
@@ -1120,6 +1383,629 @@ def raise_error(message, pos) {
     throw(message)
 }
 
+# The host's ImportError label. A label other than NovaError is part of the
+# message text a `catch` binds ("ImportError: cannot find module ..."), so it
+# is written into the thrown text.
+def import_error(message, pos) {
+    throw("ImportError: " + message)
+}
+
+# The host's TypeError label, for a built-in given something it cannot use.
+def type_error(message, pos) {
+    throw("TypeError: " + message)
+}
+
+# ---- the sandbox profile (docs/spec/16-sandbox.md) ---------------------
+
+# Which capability each gated built-in belongs to ([sbx.capabilities]). A name that is not
+# here is a pure function and is defined in every profile.
+let CAPABILITY_OF = {
+    "read": "files.read", "exists": "files.read", "listdir": "files.read",
+    "write": "files.write", "mkdir": "files.write", "remove": "files.write",
+    "rename": "files.write", "copy": "files.write",
+    "env": "env",
+    "time": "clock", "monotonic": "clock", "now": "clock", "sleep": "clock", "format_time": "clock",
+    "random": "random", "randint": "random", "choice": "random", "shuffle": "random",
+    "input": "stdin",
+    "exit": "process", "args": "process", "platform": "process", "cwd": "process",
+    "abspath": "process", "realpath": "process",
+    "regex": "regex", "replace_all": "regex"
+}
+
+# What this engine's programs may reach. Set once, before the program runs, by
+# configure_sandbox(); the engine that runs this file is itself trusted.
+let SANDBOX = {
+    restricted: false, read: [], write: [], import_from: [], env: [], clock: false,
+    "random": false, stdin: false, process: false, regex: false, python: [], limits: {}
+}
+
+def sandbox_sep() {
+    if platform() == "Windows" {
+        return "\\"
+    }
+    return "/"
+}
+
+# A path as the file system compares it: case-folded on Windows.
+def sandbox_norm(path) {
+    if platform() == "Windows" {
+        return lower(replace_all(path, "/", "\\"))
+    }
+    return path
+}
+
+def configure_sandbox(config) {
+    if config["deterministic"] {
+        DET["on"] = true
+        DET["state"] = config["seed"] % DET_MODULUS
+        DET["start"] = num(config["clock_start"])
+    }
+    if config["profile"] != "restricted" {
+        return
+    }
+    SANDBOX["restricted"] = true
+    for kind in ["read", "write", "import_from"] {
+        let roots = []
+        for folder in config[kind] {
+            append(roots, sandbox_norm(realpath(folder)))
+        }
+        SANDBOX[kind] = roots
+    }
+    SANDBOX["env"] = config["env"]
+    SANDBOX["python"] = config["python"]
+    SANDBOX["limits"] = config["limits"]
+    for name in config["limits"] {
+        LIMITS[name] = config["limits"][name]
+    }
+    if config["limits"] != {} and "depth" in config["limits"] {
+        LIMITS["depth"] = min(config["limits"]["depth"], 60)
+    }
+    begin_counters()
+    for flag in ["clock", "random", "stdin", "process", "regex"] {
+        SANDBOX[flag] = config[flag]
+    }
+}
+
+def cap_has(capability) {
+    if not SANDBOX["restricted"] {
+        return true
+    }
+    if capability == "files.read" {
+        return len(SANDBOX["read"]) > 0
+    }
+    if capability == "files.write" {
+        return len(SANDBOX["write"]) > 0
+    }
+    if capability == "import" {
+        return len(SANDBOX["import_from"]) > 0
+    }
+    if capability == "env" {
+        return len(SANDBOX["env"]) > 0
+    }
+    return SANDBOX[capability]
+}
+
+# Is the built-in `name` defined for this engine's programs? A denied name is exactly as
+# undefined as one the program never wrote.
+def builtin_defined(name) {
+    if not SANDBOX["restricted"] {
+        return true
+    }
+    if not (name in CAPABILITY_OF) {
+        return true
+    }
+    return cap_has(CAPABILITY_OF[name])
+}
+
+# Is the real path `real` one of the granted folders or inside one? A folder that merely
+# starts with a granted folder's name is not.
+def sandbox_inside(real, roots) {
+    let sep = sandbox_sep()
+    for root in roots {
+        if real == root {
+            return true
+        }
+        let prefix = root
+        if root[len(root) - 1:] != sep {
+            prefix = root + sep
+        }
+        if real[0:len(prefix)] == prefix {
+            return true
+        }
+    }
+    return false
+}
+
+# Refuse a path that lies outside the folders granted for `kind` ([sbx.paths]).
+def check_path(path, kind, label) {
+    if not SANDBOX["restricted"] or type(path) != "string" {
+        return
+    }
+    let granted = false
+    try {
+        granted = sandbox_inside(sandbox_norm(realpath(path)), SANDBOX[kind])
+    } catch problem {
+        granted = false
+    }
+    if not granted {
+        throw(label + ": " + path + " is outside the folders this program may use")
+    }
+}
+
+# The file forms of append and the delete statement are writes.
+def check_file_write(path) {
+    if SANDBOX["restricted"] {
+        if not cap_has("files.write") {
+            throw("the 'files.write' capability is not granted")
+        }
+        check_path(path, "write", "FileError")
+    }
+}
+
+# The paths a built-in takes, checked before it is called.
+def check_builtin_paths(name, call_args) {
+    if not SANDBOX["restricted"] {
+        return
+    }
+    if name == "read" or name == "exists" or name == "listdir" {
+        check_path(call_args[0], "read", "FileError")
+    }
+    if name == "write" or name == "mkdir" or name == "remove" {
+        check_path(call_args[0], "write", "FileError")
+    }
+    if name == "rename" {
+        check_path(call_args[0], "write", "FileError")
+        check_path(call_args[1], "write", "FileError")
+    }
+    if name == "copy" {
+        check_path(call_args[0], "read", "FileError")
+        check_path(call_args[1], "write", "FileError")
+    }
+    if name == "append" and type(call_args[0]) == "string" {
+        check_file_write(call_args[0])
+    }
+}
+
+# ---- the deterministic mode (docs/spec/16-sandbox.md [sbx.determinism]) ---
+
+# A random generator the specification fixes (Knuth's MMIX linear congruential generator, 64 bits)
+# and a clock the program cannot read from the machine: `time()` is the start plus the virtual
+# seconds slept, `sleep` advances it without waiting. The same program, seed and start give the
+# same output on every engine.
+let DET = {on: false, state: 0, start: 0.0, elapsed: 0.0}
+let DET_MODULUS = 18446744073709551616
+let DET_NAMES = {
+    "time": true, monotonic: true, now: true, sleep: true, format_time: true,
+    "random": true, randint: true, choice: true, shuffle: true
+}
+
+def det_next53() {
+    DET["state"] = (6364136223846793005 * DET["state"] + 1442695040888963407) % DET_MODULUS
+    return DET["state"] // 2048
+}
+
+# A whole number from 0 up to but not including n.
+def det_below(n) {
+    return (det_next53() * n) // 9007199254740992
+}
+
+def det_zero(n, width) {
+    let text = str(n)
+    while len(text) < width {
+        text = "0" + text
+    }
+    return text
+}
+
+# Seconds as the parts of a UTC date, or the error of a time outside the years 1 to 9999.
+def det_parts(seconds, who) {
+    if seconds != seconds or seconds - seconds != 0 or seconds < -62135596800 or seconds >= 253402300800 {
+        throw("TypeError: " + who + ": that time is out of range")
+    }
+    let whole = floor(seconds)
+    let micro = round((seconds - whole) * 1000000)
+    if micro >= 1000000 {
+        whole = whole + 1
+        micro = micro - 1000000
+    }
+    let days = whole // 86400
+    let rest = whole - days * 86400
+    # civil date from the day count (Howard Hinnant's algorithm)
+    let z = days + 719468
+    let era = z // 146097
+    let doe = z - era * 146097
+    let yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
+    let year = yoe + era * 400
+    let doy = doe - (365 * yoe + yoe // 4 - yoe // 100)
+    let mp = (5 * doy + 2) // 153
+    let day = doy - (153 * mp + 2) // 5 + 1
+    let month = mp + 3
+    if mp >= 10 {
+        month = mp - 9
+    }
+    if month <= 2 {
+        year = year + 1
+    }
+    # the day of the year: the 1st of January of this year, counted the same way
+    let y1 = year - 1
+    let era1 = y1 // 400
+    let yoe1 = y1 - era1 * 400
+    let jan1 = era1 * 146097 + yoe1 * 365 + yoe1 // 4 - yoe1 // 100 + 306 - 719468
+    return {
+        year: year, month: month, day: day, hour: rest // 3600, minute: (rest % 3600) // 60,
+        second: rest % 60, micro: micro, yday: days - jan1 + 1
+    }
+}
+
+def det_iso(seconds) {
+    let p = det_parts(seconds, "now()")
+    let text = det_zero(p["year"], 4) + "-" + det_zero(p["month"], 2) + "-" + det_zero(p["day"], 2) + "T" + det_zero(p["hour"], 2) + ":" + det_zero(p["minute"], 2) + ":" + det_zero(p["second"], 2)
+    if p["micro"] != 0 {
+        text = text + "." + det_zero(p["micro"], 6)
+    }
+    return text + "+00:00"
+}
+
+def det_format(seconds, fmt) {
+    let p = det_parts(seconds, "format_time()")
+    let out = ""
+    let i = 0
+    while i < len(fmt) {
+        let ch = fmt[i:i + 1]
+        if ch != "%" {
+            out = out + ch
+            i = i + 1
+            continue
+        }
+        if i + 1 >= len(fmt) {
+            throw("TypeError: format_time(): a format cannot end with '%'")
+        }
+        let d = fmt[i + 1:i + 2]
+        if d == "Y" {
+            out = out + det_zero(p["year"], 4)
+        } else if d == "m" {
+            out = out + det_zero(p["month"], 2)
+        } else if d == "d" {
+            out = out + det_zero(p["day"], 2)
+        } else if d == "H" {
+            out = out + det_zero(p["hour"], 2)
+        } else if d == "M" {
+            out = out + det_zero(p["minute"], 2)
+        } else if d == "S" {
+            out = out + det_zero(p["second"], 2)
+        } else if d == "j" {
+            out = out + det_zero(p["yday"], 3)
+        } else if d == "y" {
+            out = out + det_zero(p["year"] % 100, 2)
+        } else if d == "%" {
+            out = out + "%"
+        } else {
+            throw("TypeError: format_time(): '%" + d + "' is not supported in the deterministic mode")
+        }
+        i = i + 2
+    }
+    return out
+}
+
+# The built-ins that read the clock or draw at random, in the deterministic mode. Where an argument is
+# wrong the host's own function is called, only to raise its own error.
+def det_builtin(name, call_args) {
+    if name == "time" {
+        return DET["start"] + DET["elapsed"]
+    }
+    if name == "monotonic" {
+        return DET["elapsed"]
+    }
+    if name == "now" {
+        return det_iso(DET["start"] + DET["elapsed"])
+    }
+    if name == "sleep" {
+        let ms = call_args[0]
+        if type(ms) != "number" or ms != ms or ms - ms != 0 or ms < 0 {
+            sleep(ms)
+        }
+        DET["elapsed"] = DET["elapsed"] + ms / 1000.0
+        return make_nothing()
+    }
+    if name == "format_time" {
+        if type(call_args[0]) != "number" or type(call_args[1]) != "string" {
+            return format_time(call_args[0], call_args[1])
+        }
+        return det_format(call_args[0], call_args[1])
+    }
+    if name == "random" {
+        return det_next53() / 9007199254740992
+    }
+    if name == "randint" {
+        randint(call_args[0], call_args[1])
+        let low = floor(call_args[0])
+        let high = floor(call_args[1])
+        return low + det_below(high - low + 1)
+    }
+    if name == "choice" {
+        choice(call_args[0])
+        return call_args[0][det_below(len(call_args[0]))]
+    }
+    if type(call_args[0]) != "list" {
+        shuffle(call_args[0])
+    }
+    let items = call_args[0]
+    let i = len(items) - 1
+    while i > 0 {
+        let j = det_below(i + 1)
+        let held = items[i]
+        items[i] = items[j]
+        items[j] = held
+        i = i - 1
+    }
+    return items
+}
+
+# ---- the limits of a run (docs/spec/16-sandbox.md [sbx.limits]) ---------
+
+# The numbers in force. Only the restricted profile counts anything (set by configure_sandbox);
+# `depth` is the host's call depth for this interpreter, 60, unless the embedder lowers it.
+let LIMITS = {
+    steps: 5000000, time: 5000, output: 1000000, list: 1000000, string: 1000000,
+    dict: 1000000, depth: 60
+}
+
+# What this run has used.
+let RUN = {steps: 0, output: 0, started: 0, next_check: 1000}
+
+# The three fatal limits end the run with a message that begins "LimitError: ". A `try` of the
+# program never sees one, and no `finally` block runs ([sbx.limits]).
+def limit_error(message) {
+    throw("LimitError: " + message)
+}
+
+def is_fatal(e) {
+    return type(e) == "string" and e[0:12] == "LimitError: "
+}
+
+def begin_counters() {
+    RUN["steps"] = 0
+    RUN["output"] = 0
+    RUN["started"] = monotonic()
+    RUN["next_check"] = min(1000, LIMITS["steps"] + 1)
+}
+
+def check_time(extra_ms) {
+    if (monotonic() - RUN["started"]) * 1000 + extra_ms > LIMITS["time"] {
+        limit_error("time limit of " + str(LIMITS["time"]) + " ms exceeded")
+    }
+}
+
+def step_slow() {
+    if RUN["steps"] > LIMITS["steps"] {
+        limit_error("step budget of " + str(LIMITS["steps"]) + " steps exhausted - is there a loop that never ends?")
+    }
+    check_time(0)
+    RUN["next_check"] = min(RUN["steps"] + 1000, LIMITS["steps"] + 1)
+}
+
+# One pass of a loop or one call.
+def count_step() {
+    if SANDBOX["restricted"] {
+        RUN["steps"] = RUN["steps"] + 1
+        if RUN["steps"] >= RUN["next_check"] {
+            step_slow()
+        }
+    }
+}
+
+def count_output(text) {
+    let size = byte_length(text) + 1          # bytes, as the Python engines count them
+    if RUN["output"] + size > LIMITS["output"] {
+        limit_error("output limit of " + str(LIMITS["output"]) + " bytes exceeded")
+    }
+    RUN["output"] = RUN["output"] + size
+}
+
+def string_too_long() {
+    throw("a string cannot grow beyond " + str(LIMITS["string"]) + " characters")
+}
+
+def list_too_long() {
+    throw("a list cannot grow beyond " + str(LIMITS["list"]) + " items")
+}
+
+# Does the display text of these values certainly have more than `limit` characters? A lower
+# bound that stops the moment it passes the limit, so a structure that shares its parts with
+# itself is refused after `limit` steps and never turned into text.
+def text_would_exceed(parts, limit) {
+    let remaining = limit
+    let stack = []
+    for part in parts {
+        append(stack, [part, 0])
+    }
+    while len(stack) > 0 {
+        let entry = pop(stack)
+        let value = entry[0]
+        let depth = entry[1]
+        let kind = type(value)
+        if kind == "string" {
+            remaining = remaining - len(value)
+        } else if kind == "list" or kind == "dict" {
+            if depth > 200 {
+                # a structure that contains itself prints as [...]: cut it off rather than follow it
+                remaining = remaining - 5
+            } else {
+                remaining = remaining - 2 - max(len(value) - 1, 0) * 2
+                if kind == "list" {
+                    for item in value {
+                        append(stack, [item, depth + 1])
+                    }
+                } else {
+                    for key, item in value {
+                        append(stack, [key, depth + 1])
+                        append(stack, [item, depth + 1])
+                    }
+                }
+            }
+        } else {
+            remaining = remaining - 1
+        }
+        if remaining < 0 {
+            return true
+        }
+    }
+    return false
+}
+
+# How many items range(...) would make, or -1 when range() is about to refuse its arguments.
+def limits_range_count(call_args) {
+    let start = 0
+    let end = 0
+    let stride = 1
+    if len(call_args) == 1 {
+        end = call_args[0]
+    } else if len(call_args) == 2 {
+        start = call_args[0]
+        end = call_args[1]
+    } else {
+        start = call_args[0]
+        end = call_args[1]
+        stride = call_args[2]
+    }
+    for value in [start, end, stride] {
+        if type(value) != "number" or value - value != 0 or value != value // 1 {
+            return -1
+        }
+    }
+    if stride == 0 {
+        return -1
+    }
+    let span = end - start
+    if stride < 0 {
+        span = start - end
+    }
+    if span <= 0 {
+        return 0
+    }
+    if stride < 0 {
+        stride = 0 - stride
+    }
+    return (span - 1) // stride + 1
+}
+
+# What a built-in's operands allow to be checked before it builds anything.
+def check_builtin_limits(name, call_args) {
+    if name == "append" and len(call_args) == 2 and type(call_args[0]) == "list" and len(call_args[0]) >= LIMITS["list"] {
+        list_too_long()
+    }
+    if name == "range" and len(call_args) >= 1 and len(call_args) <= 3 {
+        let count = limits_range_count(call_args)
+        if count > LIMITS["list"] {
+            throw("range() would build a list of " + str(count) + " items, which is too large")
+        }
+    }
+    if name == "join" and len(call_args) == 2 and type(call_args[0]) == "list" and type(call_args[1]) == "string" {
+        if len(call_args[0]) + len(call_args[1]) * max(len(call_args[0]) - 1, 0) > LIMITS["string"] {
+            string_too_long()
+        }
+    }
+    if (name == "pad" or name == "pad_left") and len(call_args) == 2 and type(call_args[1]) == "number" and call_args[1] > LIMITS["string"] {
+        string_too_long()
+    }
+    if name == "replace_all" and len(call_args) == 3 and type(call_args[0]) == "string" and type(call_args[1]) == "string" and type(call_args[2]) == "string" and call_args[1] != "" {
+        let grown = len(call_args[0]) + (len(split(call_args[0], call_args[1])) - 1) * max(len(call_args[2]) - len(call_args[1]), 0)
+        if grown > LIMITS["string"] {
+            string_too_long()
+        }
+    }
+    if name == "sleep" and len(call_args) == 1 and type(call_args[0]) == "number" and not DET["on"] {
+        check_time(call_args[0])          # a virtual sleep (the deterministic mode) takes no time
+    }
+    if name == "input" {
+        check_time(0)
+    }
+    if (name == "str" or name == "join") and len(call_args) >= 1 {
+        if text_would_exceed([call_args[0]], LIMITS["string"]) {
+            string_too_long()
+        }
+    }
+    if name == "print" or name == "log" {
+        if text_would_exceed(call_args, LIMITS["string"]) {
+            string_too_long()
+        }
+        let text = ""
+        let i = 0
+        while i < len(call_args) {
+            if i > 0 {
+                text = text + " "
+            }
+            text = text + target_str(call_args[i])
+            i = i + 1
+        }
+        count_output(text)
+    }
+}
+
+def check_result_size(value) {
+    let kind = type(value)
+    if kind == "string" and len(value) > LIMITS["string"] {
+        string_too_long()
+    }
+    if kind == "list" and len(value) > LIMITS["list"] {
+        list_too_long()
+    }
+}
+
+# The operators + and * on strings and lists, checked from the operands.
+def check_binop_limits(op, left, right) {
+    let lt = type(left)
+    let rt = type(right)
+    if op == "+" and lt == "string" and rt == "string" and len(left) + len(right) > LIMITS["string"] {
+        string_too_long()
+    }
+    if op == "+" and lt == "list" and rt == "list" and len(left) + len(right) > LIMITS["list"] {
+        list_too_long()
+    }
+    if op == "+" and lt == "dict" and rt == "dict" {
+        let merged = len(left)
+        for key in keys(right) {
+            if not (key in left) {
+                merged = merged + 1
+            }
+        }
+        if merged > LIMITS["dict"] {
+            throw("a dictionary cannot hold more than " + str(LIMITS["dict"]) + " entries")
+        }
+    }
+    if op == "*" {
+        if (lt == "string" and rt == "number") or (lt == "number" and rt == "string") {
+            let text = left
+            let times = right
+            if lt == "number" {
+                text = right
+                times = left
+            }
+            if times == times // 1 and times > 0 and len(text) * times > LIMITS["string"] {
+                throw("repeating that string " + str(times) + " times would be too long")
+            }
+        }
+        if (lt == "list" and rt == "number") or (lt == "number" and rt == "list") {
+            let items = left
+            let times = right
+            if lt == "number" {
+                items = right
+                times = left
+            }
+            if times == times // 1 and times > 0 and len(items) * times > LIMITS["list"] {
+                throw("repeating that list " + str(times) + " times would exceed " + str(LIMITS["list"]) + " items")
+            }
+        }
+    }
+}
+
+# A new key in a dictionary: the number of entries is bounded.
+def check_dict_entry(target, key) {
+    if SANDBOX["restricted"] and type(target) == "dict" and not (key in target) and len(target) >= LIMITS["dict"] {
+        throw("a dictionary cannot hold more than " + str(LIMITS["dict"]) + " entries")
+    }
+}
+
 # ---- built-ins --------------------------------------------------------
 
 let BUILTIN_NAMES = {
@@ -1136,9 +2022,58 @@ let BUILTIN_NAMES = {
     env: true, exit: true, args: true, platform: true,
     cwd: true, mkdir: true, remove: true, rename: true, copy: true,
     regex: true, replace_all: true, split_lines: true,
+    abspath: true, realpath: true, dirname: true, byte_length: true, monotonic: true,
     pad: true, pad_left: true, reverse: true, sorted: true,
     "assert": true, log: true,
     map: true, filter: true, reduce: true
+}
+
+# Built-ins with a fixed argument count; the rest take a variable number.
+# Matches the host's BuiltinFunction arities.
+let BUILTIN_ARITY = {
+    len: 1, append: 2, upper: 1, lower: 1, trim: 1, join: 2, str: 1, num: 1,
+    type: 1, keys: 1, values: 1, read: 1, write: 2, exists: 1, listdir: 1,
+    abspath: 1, realpath: 1, dirname: 1, byte_length: 1, monotonic: 0, "time": 0, sleep: 1, now: 0, format_time: 2,
+    "random": 0, randint: 2, choice: 1, shuffle: 1, "abs": 1, floor: 1,
+    ceil: 1, sqrt: 1, "pow": 2, sin: 1, cos: 1, tan: 1, ln: 1, log10: 1,
+    env: 1, args: 0, platform: 0, cwd: 0, mkdir: 1, remove: 1, rename: 2,
+    copy: 2, regex: 2, replace_all: 3, split_lines: 1, pad: 2, pad_left: 2,
+    reverse: 1, map: 2, filter: 2
+}
+
+# Built-ins that take a range of argument counts: [fewest, most, message]. The
+# messages are the host's.
+let VARIABLE_ARITY = {
+    pop: [1, 2, "pop() takes a list and an optional index"],
+    range: [1, 3, "range() takes 1, 2 or 3 numbers"],
+    split: [1, 2, "split() takes a string and an optional separator"],
+    round: [1, 2, "round() takes a number and an optional digit count"],
+    sorted: [1, 2, "sorted() takes a list and an optional true or false"],
+    reduce: [2, 3, "reduce() takes a function, a list and an optional starting value"],
+    "assert": [1, 2, "assert() takes a condition and an optional message"],
+    exit: [0, 1, "exit() takes an optional status code and nothing else"],
+    input: [0, 1, "input() takes an optional prompt and nothing else"]
+}
+
+# Gives every function value an identity, since a function is a dictionary
+# here and `==` on dictionaries compares contents.
+let FUNCTION_IDS = {next: 0}
+
+# A function value is a dictionary here, so the host would write it out as one;
+# json.dumps() must refuse it as the host does.
+def check_jsonable(v, pos) {
+    if is_target_function(v) {
+        type_error("json.dumps() cannot represent a function", pos)
+    }
+    if type(v) == "list" {
+        for item in v {
+            check_jsonable(item, pos)
+        }
+    } else if type(v) == "dict" {
+        for item in values(v) {
+            check_jsonable(item, pos)
+        }
+    }
 }
 
 def is_target_function(v) {
@@ -1155,6 +2090,18 @@ def target_str(v) {
         }
     }
     return str(v)
+}
+
+# "a number", "a list", "nothing": how an error message names a value's type.
+def type_phrase(v) {
+    let kind = target_type(v)
+    if kind == "nothing" {
+        return kind
+    }
+    if kind == "dict" {
+        return "a dictionary"
+    }
+    return "a " + kind
 }
 
 def target_type(v) {
@@ -1176,6 +2123,21 @@ def numbers_from_call_args(call_args) {
 }
 
 def call_builtin(name, call_args, pos) {
+    if not SANDBOX["restricted"] {
+        return call_builtin_raw(name, call_args, pos)
+    }
+    count_step()
+    check_builtin_limits(name, call_args)
+    let result = call_builtin_raw(name, call_args, pos)
+    check_result_size(result)
+    return result
+}
+
+def call_builtin_raw(name, call_args, pos) {
+    check_builtin_paths(name, call_args)
+    if DET["on"] and name in DET_NAMES {
+        return det_builtin(name, call_args)
+    }
     if name == "print" {
         let text = ""
         let i = 0
@@ -1255,6 +2217,21 @@ def call_builtin(name, call_args, pos) {
     if name == "listdir" {
         return listdir(call_args[0])
     }
+    if name == "abspath" {
+        return abspath(call_args[0])
+    }
+    if name == "realpath" {
+        return realpath(call_args[0])
+    }
+    if name == "byte_length" {
+        return byte_length(call_args[0])
+    }
+    if name == "monotonic" {
+        return monotonic()
+    }
+    if name == "dirname" {
+        return dirname(call_args[0])
+    }
     if name == "input" {
         if len(call_args) == 0 {
             return input()
@@ -1331,6 +2308,9 @@ def call_builtin(name, call_args, pos) {
         return sum(numbers_from_call_args(call_args))
     }
     if name == "env" {
+        if SANDBOX["restricted"] and not (call_args[0] in SANDBOX["env"]) {
+            return make_nothing()
+        }
         return env(call_args[0])
     }
     if name == "exit" {
@@ -1346,12 +2326,14 @@ def call_builtin(name, call_args, pos) {
         return platform()
     }
     if name == "json_dumps" {
+        check_jsonable(call_args[0], pos)
         return json.dumps(call_args[0])
     }
     if name == "json_loads" {
         return json.loads(call_args[0])
     }
     if name == "json_pretty" {
+        check_jsonable(call_args[0], pos)
         return json.pretty(call_args[0])
     }
     if name == "python_import" {
@@ -1430,7 +2412,16 @@ def call_builtin(name, call_args, pos) {
         return assert(call_args[0], call_args[1])
     }
     if name == "log" {
-        return log(call_args[0])
+        let text = ""
+        let i = 0
+        while i < len(call_args) {
+            if i > 0 {
+                text = text + " "
+            }
+            text = text + target_str(call_args[i])
+            i = i + 1
+        }
+        return log(text)
     }
     if name == "map" {
         return target_map(call_args[0], call_args[1], pos)
@@ -1451,7 +2442,17 @@ def call_builtin(name, call_args, pos) {
 # already has everything it takes to invoke a function value, unlike the
 # host, which had to grow a new needs_interpreter mechanism for this.
 
+def check_callable_and_list(who, fn, items, pos) {
+    if not is_target_function(fn) {
+        type_error(who + " needs a function, but got " + type_phrase(fn), pos)
+    }
+    if type(items) != "list" {
+        type_error(who + " needs a list, but got " + type_phrase(items), pos)
+    }
+}
+
 def target_map(fn, items, pos) {
+    check_callable_and_list("map()", fn, items, pos)
     let out = []
     for item in items {
         append(out, call_target_value(fn, [item], pos))
@@ -1460,11 +2461,12 @@ def target_map(fn, items, pos) {
 }
 
 def target_filter(fn, items, pos) {
+    check_callable_and_list("filter()", fn, items, pos)
     let out = []
     for item in items {
         let keep = call_target_value(fn, [item], pos)
         if type(keep) != "boolean" {
-            raise_error("filter()'s function must return true or false", pos)
+            type_error("filter()'s function must return true or false", pos)
         }
         if keep {
             append(out, item)
@@ -1476,6 +2478,7 @@ def target_filter(fn, items, pos) {
 def target_reduce(call_args, pos) {
     let fn = call_args[0]
     let items = call_args[1]
+    check_callable_and_list("reduce()", fn, items, pos)
     let accumulator = 0
     let rest = items
     if len(call_args) >= 3 {
@@ -1497,17 +2500,17 @@ def target_reduce(call_args, pos) {
 # ---- calling a target function -----------------------------------------
 
 let CALL_DEPTH = {n: 0}
-let MAX_TARGET_DEPTH = 60
 
 def call_function(fn, call_args, pos) {
     if len(call_args) != len(fn["params"]) {
         raise_error(fn["name"] + "() expects " + str(len(fn["params"])) + " argument(s) but got " + str(len(call_args)), pos)
     }
 
+    count_step()
     CALL_DEPTH["n"] = CALL_DEPTH["n"] + 1
-    if CALL_DEPTH["n"] > MAX_TARGET_DEPTH {
+    if CALL_DEPTH["n"] > LIMITS["depth"] {
         CALL_DEPTH["n"] = CALL_DEPTH["n"] - 1
-        raise_error("call depth of " + str(MAX_TARGET_DEPTH) + " exceeded - is the recursion missing a base case?", pos)
+        raise_error("call depth of " + str(LIMITS["depth"]) + " exceeded - is the recursion missing a base case?", pos)
     }
 
     let frame = make_env(fn["closure"], true, false)
@@ -1547,9 +2550,18 @@ def eval_call(node, scope) {
 # into a target function value of their own (Stage 11).
 def call_target_value(callee, call_args, pos) {
     if not is_target_function(callee) {
-        raise_error(target_type(callee) + " is not a function, so it cannot be called", pos)
+        raise_error(type_phrase(callee) + " is not a function, so it cannot be called", pos)
     }
     if callee["kind"] == "builtin" {
+        if callee["name"] in BUILTIN_ARITY and len(call_args) != BUILTIN_ARITY[callee["name"]] {
+            raise_error(callee["name"] + "() takes " + str(BUILTIN_ARITY[callee["name"]]) + " argument(s) but got " + str(len(call_args)), pos)
+        }
+        if callee["name"] in VARIABLE_ARITY {
+            let limits = VARIABLE_ARITY[callee["name"]]
+            if len(call_args) < limits[0] or len(call_args) > limits[1] {
+                raise_error(limits[2], pos)
+            }
+        }
         return call_builtin(callee["name"], call_args, pos)
     }
     return call_function(callee, call_args, pos)
@@ -1561,7 +2573,7 @@ def eval_var(node, scope) {
     if env_has(scope, node["name"]) {
         return env_get(scope, node["name"])
     }
-    if node["name"] in BUILTIN_NAMES {
+    if node["name"] in BUILTIN_NAMES and builtin_defined(node["name"]) {
         return {kind: "builtin", name: node["name"]}
     }
     raise_error("undefined name '" + node["name"] + "'", node["pos"])
@@ -1590,6 +2602,9 @@ def eval_binop(node, scope) {
     let left = eval_expr(node["left"], scope)
     let right = eval_expr(node["right"], scope)
     let op = node["op"]
+    if SANDBOX["restricted"] {
+        check_binop_limits(op, left, right)
+    }
     if op == "+" {
         return left + right
     }
@@ -1611,15 +2626,29 @@ def eval_binop(node, scope) {
     raise_error("unknown operator '" + op + "'", node["pos"])
 }
 
+# Functions are equal only to themselves.
+def target_equal(a, b) {
+    if type(a) == "dict" and type(b) == "dict" and is_target_function(a) and is_target_function(b) {
+        if a["kind"] != b["kind"] {
+            return false
+        }
+        if a["kind"] == "builtin" {
+            return a["name"] == b["name"]
+        }
+        return a["id"] == b["id"]
+    }
+    return a == b
+}
+
 def eval_compare(node, scope) {
     let left = eval_expr(node["left"], scope)
     let right = eval_expr(node["right"], scope)
     let op = node["op"]
     if op == "==" {
-        return left == right
+        return target_equal(left, right)
     }
     if op == "!=" {
-        return left != right
+        return not target_equal(left, right)
     }
     if op == "<" {
         return left < right
@@ -1685,8 +2714,18 @@ def eval_dict(node, scope) {
 
 def eval_fstring(node, scope) {
     let text = ""
+    let pieces = []
     for part in node["parts"] {
-        text = text + target_str(eval_expr(part, scope))
+        append(pieces, eval_expr(part, scope))
+    }
+    if SANDBOX["restricted"] and text_would_exceed(pieces, LIMITS["string"]) {
+        string_too_long()
+    }
+    for piece in pieces {
+        text = text + target_str(piece)
+    }
+    if SANDBOX["restricted"] {
+        check_result_size(text)
     }
     return text
 }
@@ -1784,6 +2823,7 @@ def exec_if(node, scope) {
 def exec_while(node, scope) {
     let broke = false
     while eval_condition(node, scope, "while") {
+        count_step()
         let result = exec_scoped_block(node["body"], scope)
         if result["kind"] == "break" {
             broke = true
@@ -1806,6 +2846,11 @@ def loop_number(node, value, role) {
     if type(value) != "number" {
         raise_error(role + " must be a number, but this is a " + target_type(value), node["pos"])
     }
+    # NaN and infinity: x - x is 0 only for a finite number. Matches the host's
+    # loop_number, which refuses them rather than count their iterations.
+    if value - value != 0 {
+        raise_error(role + " must be a finite number, but this is " + str(value), node["pos"])
+    }
     return value
 }
 
@@ -1823,13 +2868,20 @@ def exec_for(node, scope) {
     }
     let iterations = 0
     if span >= 0 {
-        iterations = int_floor(span / step_value) + 1
+        let quotient = span / step_value
+        if quotient != 0 and quotient + quotient == quotient {
+            # An infinite count (a float span over a step so small that the count passes the largest float):
+            # the same error as any other arithmetic on a number too large for this operation.
+            raise_error("a number is too large for this operation - an integer beyond the range of a float cannot be divided or mixed with a float", node["pos"])
+        }
+        iterations = int_floor(quotient) + 1
     }
 
     let loop_env = make_env(scope, false, false)
     let broke = false
     let index = 0
     while index < iterations {
+        count_step()
         let offset = index * step_value
         if node["descending"] {
             loop_env["vars"][node["name"]] = start - offset
@@ -1870,6 +2922,7 @@ def exec_for_in(node, scope) {
 
     if node["has_second"] {
         for a, b in collection {
+            count_step()
             loop_env["vars"][node["name"]] = a
             loop_env["vars"][node["second_name"]] = b
             let result = exec_block(node["body"]["statements"], make_env(loop_env, false, false))
@@ -1886,6 +2939,7 @@ def exec_for_in(node, scope) {
         }
     } else {
         for a in collection {
+            count_step()
             loop_env["vars"][node["name"]] = a
             let result = exec_block(node["body"]["statements"], make_env(loop_env, false, false))
             if result["kind"] == "break" {
@@ -1909,11 +2963,12 @@ def exec_for_in(node, scope) {
 
 def exec_try(node, scope) {
     let result = sig_normal()
+    let fatal = false
     try {
         try {
             result = exec_scoped_block(node["body"], scope)
         } catch e {
-            if not node["has_catch"] {
+            if not node["has_catch"] or is_fatal(e) {
                 throw(e)
             }
             let catch_env = make_env(scope, false, false)
@@ -1922,8 +2977,13 @@ def exec_try(node, scope) {
             }
             result = exec_block(node["catch_block"]["statements"], catch_env)
         }
+    } catch outer {
+        if is_fatal(outer) {
+            fatal = true
+        }
+        throw(outer)
     } finally {
-        if node["has_finally"] {
+        if node["has_finally"] and not fatal {
             let finally_result = exec_scoped_block(node["finally_block"], scope)
             if finally_result["kind"] != "normal" {
                 result = finally_result
@@ -1937,6 +2997,7 @@ def exec_index_assign(node, scope) {
     let target = eval_expr(node["target"], scope)
     let index_value = eval_expr(node["index"], scope)
     let value = eval_expr(node["value"], scope)
+    check_dict_entry(target, index_value)
     target[index_value] = value
     return sig_normal()
 }
@@ -1946,14 +3007,20 @@ def exec_member_assign(node, scope) {
     if type(target) != "dict" {
         raise_error("only a dictionary can have fields set, but this is a " + target_type(target), node["pos"])
     }
-    target[node["name"]] = eval_expr(node["value"], scope)
+    let member_value = eval_expr(node["value"], scope)
+    check_dict_entry(target, node["name"])
+    target[node["name"]] = member_value
     return sig_normal()
 }
 
 def exec_delete(node, scope) {
     let target = eval_expr(node["target"], scope)
     if type(target) != "dict" {
-        raise_error("delete works on dictionary entries, but this is a " + target_type(target), node["pos"])
+        let hint = ""
+        if type(target) == "list" {
+            hint = " - use pop() to remove a list item"
+        }
+        raise_error("delete works on dictionary entries, but this is " + type_phrase(target) + hint, node["pos"])
     }
     let key = eval_expr(node["key"], scope)
     delete target[key]
@@ -1962,6 +3029,7 @@ def exec_delete(node, scope) {
 
 def exec_delete_file(node, scope) {
     let path = eval_expr(node["path"], scope)
+    check_file_write(path)
     delete(path)
     return sig_normal()
 }
@@ -2002,7 +3070,15 @@ def exec_stmt(node, scope) {
         return sig_continue()
     }
     if kind == "FunctionDef" {
-        env_define(scope, node["name"], {kind: "function", name: node["name"], params: node["params"], body: node["body"], closure: scope})
+        FUNCTION_IDS["next"] = FUNCTION_IDS["next"] + 1
+        env_define(scope, node["name"], {
+            kind: "function",
+            id: FUNCTION_IDS["next"],
+            name: node["name"],
+            params: node["params"],
+            body: node["body"],
+            closure: scope
+        })
         return sig_normal()
     }
     if kind == "Return" {
@@ -2052,10 +3128,10 @@ def exec_stmt(node, scope) {
 # the same absolute path is what makes the module cache and the circular-
 # import check trustworthy.
 
-let MODULE_CACHE = {}          # absolute path -> exports dict
-let MODULE_LOADING = []        # absolute paths currently being loaded
-let FILE_STACK = []            # directories of files currently executing
-let EXPORT_STACK = [{}]        # current module's {name: value} being built
+let MODULE_CACHE = {}    # absolute path -> exports dict
+let MODULE_LOADING = []  # absolute paths currently being loaded
+let FILE_STACK = []      # directories of files currently executing
+let EXPORT_STACK = [{}]  # current module's {name: value} being built
 
 def current_dir() {
     if len(FILE_STACK) == 0 {
@@ -2068,35 +3144,181 @@ def current_exports() {
     return EXPORT_STACK[len(EXPORT_STACK) - 1]
 }
 
+# Packages (M2): `import "math-utils"` names a package installed by
+# tools/nova-pkg.py. Same rules as the host's is_package_import and
+# resolve_package - a lowercase name with no '/' that does not end in
+# .nova - and any other path is a file, resolved exactly as before.
+let PACKAGE_FIRST = "abcdefghijklmnopqrstuvwxyz0123456789"
+let PACKAGE_REST = PACKAGE_FIRST + "._-"
+
+def is_package_import(raw_path) {
+    if len(raw_path) == 0 or not (raw_path[0:1] in PACKAGE_FIRST) {
+        return false
+    }
+    if len(raw_path) >= 5 and raw_path[len(raw_path) - 5:] == ".nova" {
+        return false
+    }
+    for ch in raw_path {
+        if not (ch in PACKAGE_REST) {
+            return false
+        }
+    }
+    return true
+}
+
+# Stop the line if a project's installed packages are not exactly what its
+# nova.json and nova.lock describe - the same three checks as the host's
+# check_installed, once per project per run.
+let CHECKED_PROJECTS = {}
+
+def check_installed(base, pos) {
+    if base in CHECKED_PROJECTS {
+        return
+    }
+    let modules = base + ".nova_modules"
+    let hint = " - run `python3 tools/nova-pkg.py install`"
+    let lead = "the packages in " + modules + " cannot be used: "
+    if not exists(base + "nova.lock") {
+        import_error(lead + "there is no nova.lock beside them" + hint, pos)
+    }
+    if not exists(base + "nova.json") {
+        import_error(lead + "there is no nova.json beside them" + hint, pos)
+    }
+    let lock_text = read(base + "nova.lock")
+    let lock = json.loads(lock_text)
+    let manifest = json.loads(read(base + "nova.json"))
+    let wanted = {}
+    if "dependencies" in manifest {
+        wanted = manifest["dependencies"]
+    }
+    if not ("requires" in lock) or lock["requires"] != wanted {
+        import_error(lead + "nova.json has changed since nova.lock was written" + hint, pos)
+    }
+    let installed = modules + "/.installed.lock"
+    if not exists(installed) or read(installed) != lock_text {
+        import_error(lead + "they were not installed from the current nova.lock" + hint, pos)
+    }
+    CHECKED_PROJECTS[base] = true
+}
+
+# Walk up from the importing file's directory to the first
+# .nova_modules/<name>/nova.json, as the host does.
+def resolve_package(name, pos) {
+    let directory = current_dir()
+    if directory == "" {
+        directory = abspath(".")
+    }
+    let searched = []
+    while true {
+        let base = directory
+        if base[len(base) - 1:] != "/" {
+            base = base + "/"
+        }
+        let package = base + ".nova_modules/" + name
+        if exists(package + "/nova.json") {
+            check_installed(base, pos)
+            let manifest = json.loads(read(package + "/nova.json"))
+            let main = "main.nova"
+            if type(manifest) == "dict" and "main" in manifest {
+                main = manifest["main"]
+            }
+            if type(main) != "string" or len(main) < 5 or main[len(main) - 5:] != ".nova" {
+                import_error("package \"" + name + "\": \"main\" in its nova.json must name a .nova file", pos)
+            }
+            let entry = abspath(package + "/" + main)
+            if not exists(entry) {
+                import_error("package \"" + name + "\" has no entry file " + main, pos)
+            }
+            return entry
+        }
+        append(searched, base + ".nova_modules")
+        let parent = dirname(directory)
+        if parent == directory {
+            let shown = join(searched[:6], "\n  ")
+            if len(searched) > 6 {
+                shown = shown + "\n  ..."
+            }
+            import_error("cannot find package \"" + name + "\" - looked in:\n  " + shown + "\nIs it in nova.json, and has `python3 tools/nova-pkg.py install` been run?", pos)
+        }
+        directory = parent
+    }
+}
+
 def resolve_import(raw_path, pos) {
+    if SANDBOX["restricted"] and not cap_has("import") {
+        import_error("the 'import' capability is not granted", pos)
+    }
+    if is_package_import(raw_path) {
+        let found = resolve_package(raw_path, pos)
+        check_path(found, "import_from", "ImportError")
+        return found
+    }
     let candidates = []
     if current_dir() != "" {
         append(candidates, current_dir() + "/" + raw_path)
     }
     append(candidates, raw_path)
 
+    if SANDBOX["restricted"] {
+        # Judge every place before looking in any of them, so a path outside the grant is
+        # refused whether or not a file is there ([sbx.paths] 4).
+        let granted = []
+        for candidate in candidates {
+            let inside = false
+            try {
+                inside = sandbox_inside(sandbox_norm(realpath(candidate)), SANDBOX["import_from"])
+            } catch problem {
+                inside = false
+            }
+            if inside {
+                append(granted, candidate)
+            }
+        }
+        if len(granted) == 0 {
+            import_error(raw_path + " is outside the folders this program may use", pos)
+        }
+        candidates = granted
+    }
+
     for candidate in candidates {
         if exists(candidate) {
             return abspath(candidate)
         }
     }
-    raise_error("cannot find module \"" + raw_path + "\" - looked in:\n  " + join(candidates, "\n  "), pos)
+    import_error("cannot find module \"" + raw_path + "\" - looked in:\n  " + join(candidates, "\n  "), pos)
 }
 
-def default_module_name(raw_path, pos) {
-    let name = raw_path
-    let slash = -1
-    let i = len(name) - 1
+# os.path.basename: "/" always separates, and so does "\\" on Windows.
+def basename(path) {
+    let windows = platform() == "Windows"
+    let i = len(path) - 1
     while i >= 0 {
-        if name[i:i + 1] == "/" {
-            slash = i
-            break
+        let ch = path[i:i + 1]
+        if ch == "/" or (windows and ch == "\\") {
+            return path[i + 1:]
         }
         i = i - 1
     }
-    if slash >= 0 {
-        name = name[slash + 1:]
+    return path
+}
+
+def default_module_name(raw_path, pos) {
+    if is_package_import(raw_path) {
+        # "math-utils" binds math_utils, like the host.
+        let bound = ""
+        for ch in raw_path {
+            if ch == "-" or ch == "." {
+                bound = bound + "_"
+            } else {
+                bound = bound + ch
+            }
+        }
+        if not is_alpha(bound[0:1]) {
+            raise_error("\"" + raw_path + "\" does not make a valid module name - import it with 'as' and choose one", pos)
+        }
+        return bound
     }
+    let name = basename(raw_path)
     let dot = len(name)
     let j = len(name) - 1
     while j >= 0 {
@@ -2107,7 +3329,7 @@ def default_module_name(raw_path, pos) {
         j = j - 1
     }
     let stem = name[:dot]
-    let valid = len(stem) > 0 and (is_alpha(stem[0:1]))
+    let valid = len(stem) > 0 and is_alpha(stem[0:1])
     let k = 1
     while valid and k < len(stem) {
         if not is_alnum(stem[k:k + 1]) {
@@ -2121,12 +3343,34 @@ def default_module_name(raw_path, pos) {
     return stem
 }
 
+# A file inside an installed package is named <package>/<file> in
+# messages, as the host does; any other file by its module name.
+def module_label(path, pos) {
+    # The host's os.sep: a native path on Windows is written with backslashes.
+    let sep = "/"
+    if platform() == "Windows" {
+        sep = "\\"
+    }
+    let marker = sep + ".nova_modules" + sep
+    let at = -1
+    let i = 0
+    while i + len(marker) <= len(path) {
+        if path[i:i + len(marker)] == marker {
+            at = i
+        }
+        i = i + 1
+    }
+    if at >= 0 {
+        return replace_all(path[at + len(marker):], sep, "/")
+    }
+    return basename(path)
+}
+
 def run_module(resolved_path, raw_path, pos) {
     if resolved_path in MODULE_CACHE {
         return MODULE_CACHE[resolved_path]
     }
     if resolved_path in MODULE_LOADING {
-        let chain = MODULE_LOADING[0]
         let names = ""
         let started = false
         for loading_path in MODULE_LOADING {
@@ -2137,11 +3381,11 @@ def run_module(resolved_path, raw_path, pos) {
                 if names != "" {
                     names = names + " -> "
                 }
-                names = names + default_module_name(loading_path, pos)
+                names = names + module_label(loading_path, pos)
             }
         }
-        names = names + " -> " + default_module_name(resolved_path, pos)
-        raise_error("circular import: " + names, pos)
+        names = names + " -> " + module_label(resolved_path, pos)
+        import_error("circular import: " + names, pos)
     }
 
     let source = read(resolved_path)
@@ -2152,11 +3396,20 @@ def run_module(resolved_path, raw_path, pos) {
 
     let exports = {}
     try {
-        let ast = parse_program(source)
-        let module_env = make_env(false, true, true)
-        define_stdlib_globals(module_env)
-        exec_block(ast["statements"], module_env)
-        exports = current_exports()
+        try {
+            let ast = parse_program(source)
+            let module_env = make_env(false, true, true)
+            define_stdlib_globals(module_env)
+            check_toplevel(exec_block(ast["statements"], module_env))
+            exports = current_exports()
+        } catch inner {
+            if is_fatal(inner) {
+                throw(inner)
+            }
+            # Whatever went wrong while the module ran reaches the importer
+            # as an ImportError that names the module and carries the report.
+            import_error("while loading module \"" + raw_path + "\":\n  " + replace_all(inner, "\n", "\n  "), pos)
+        }
     } finally {
         pop(FILE_STACK)
         pop(MODULE_LOADING)
@@ -2174,16 +3427,25 @@ def exec_import(node, scope) {
     if node["mode"] == "with" {
         for name in node["names"] {
             if not (name in exports) {
-                raise_error("module \"" + node["path"] + "\" has no exported '" + name + "'", node["pos"])
+                let available = "nothing"
+                if len(exports) > 0 {
+                    available = join(keys(exports), ", ")
+                }
+                raise_error("module \"" + node["path"] + "\" has no exported '" + name + "' - it exports " + available, node["pos"])
             }
             env_define(scope, name, exports[name])
         }
         return sig_normal()
     }
 
-    let module_name = default_module_name(node["path"], node["pos"])
+    let module_name = ""
     if node["mode"] == "as" {
         module_name = node["alias"]
+    } else {
+        module_name = default_module_name(node["path"], node["pos"])
+    }
+    if node["mode"] != "as" and module_name in BUILTIN_NAMES {
+        raise_error("'" + module_name + "' is a built-in function and cannot be used as a module name", node["pos"])
     }
     env_define(scope, module_name, exports)
     return sig_normal()
@@ -2198,7 +3460,18 @@ def run_program(source, path) {
     let ast = parse_program(source)
     let scope = make_env(false, true, true)
     define_stdlib_globals(scope)
-    exec_block(ast["statements"], scope)
+    check_toplevel(exec_block(ast["statements"], scope))
+}
+
+# A `return`, `break` or `continue` that reaches the top of a program or of a
+# module is an error.
+def check_toplevel(result) {
+    if result["kind"] == "return" {
+        raise_error("'return' only makes sense inside a function", 0)
+    }
+    if result["kind"] == "break" or result["kind"] == "continue" {
+        raise_error("'" + result["kind"] + "' is not inside a loop", 0)
+    }
 }
 
 def run_file(path) {

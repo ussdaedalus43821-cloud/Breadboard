@@ -9,7 +9,7 @@ import hostSource from './host.py?raw';
 import type { PyodideAPI } from 'pyodide';
 import { awaitResponse, resetResponse } from '../protocol/sync-buffer';
 import type { NovaMessage, NovaRequest } from '../protocol/nova-protocol';
-import { NovaRuntime } from './runtime';
+import { NOVA_TOOL_FILES, NovaRuntime, type NovaSources } from './runtime';
 
 /** Network and storage globals removed before any script runs (NOVALANG_ISOLATION.md §2). */
 const STRIPPED = [
@@ -61,8 +61,13 @@ async function init(
     loadPyodide: (o: { indexURL: string }) => Promise<PyodideAPI>;
   };
   const py = await loadPyodide({ indexURL: `${msg.base}pyodide/` });
-  const novalang = await (await fetch(`${msg.base}nova/novalang.py`)).text();
-  runtime = NovaRuntime.create(py, { novalang, host: hostSource });
+  const fetchText = async (path: string): Promise<string> =>
+    (await fetch(`${msg.base}nova/${path}`)).text();
+  const novalang = await fetchText('novalang.py');
+  const tools = Object.fromEntries(
+    await Promise.all(NOVA_TOOL_FILES.map(async (f) => [f, await fetchText(`tools/${f}`)])),
+  ) as NovaSources['tools'];
+  runtime = NovaRuntime.create(py, { novalang, tools, host: hostSource });
   runtime.setInterruptBuffer(interrupt);
 
   // From here on nothing may reach the network or storage.
