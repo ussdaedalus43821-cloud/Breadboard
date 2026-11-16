@@ -22,3 +22,15 @@ set the COOP/COEP headers the NovaLang panel needs.
 
 Docs: `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`,
 `docs/NOVALANG_BRIDGE.md`, and a demo script per phase in `docs/demos/`.
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([`LICENSE-APACHE`](LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([`LICENSE-MIT`](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
+
+at your option. The SPDX identifier is `MIT OR Apache-2.0`, the same as [NovaLang](https://github.com/ussdaedalus43821-cloud/Nova_Lang).
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in Breadboard by you, as defined in the
+Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
